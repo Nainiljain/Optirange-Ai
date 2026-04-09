@@ -3,25 +3,20 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import bcrypt from 'bcryptjs'
-import { openDb } from '@/lib/db'
+import { connectDB } from '@/lib/db'
+import { User, EvData, HealthData, Trip } from '@/lib/models'
 import { getUser, setUserSession, clearUserSession } from '@/lib/auth'
-import { writeFile, mkdir } from 'fs/promises'
-import { join } from 'path'
 
-async function uploadFile(file: any, prefix: string): Promise<string | null> {
+async function fileToBase64(file: any): Promise<string | null> {
   if (!file || typeof file === 'string' || !file.name || typeof file.arrayBuffer !== 'function' || file.size === 0) {
-    return null
+    return null;
   }
   try {
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const dir = join(process.cwd(), 'public', 'uploads')
-    await mkdir(dir, { recursive: true })
-    const filename = `${prefix}-${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`
-    await writeFile(join(dir, filename), buffer)
-    return `/uploads/${filename}`
+    const buffer = Buffer.from(await file.arrayBuffer());
+    return `data:${file.type};base64,${buffer.toString('base64')}`;
   } catch (e) {
-    console.error("Upload failed", e)
-    return null
+    console.error("Conversion failed", e);
+    return null;
   }
 }
 
@@ -31,24 +26,24 @@ export async function loginAction(prevState: any, formData: FormData) {
 
   if (!email || !password) return { error: 'Please fill all fields' }
 
-  const db = await openDb()
-  const user = await db.get('SELECT * FROM users WHERE email = ?', [email])
+  await connectDB()
+  const user = await User.findOne({ email }).lean() as any
 
   if (!user) return { error: 'User not found' }
 
   const match = await bcrypt.compare(password, user.password)
   if (!match) return { error: 'Invalid password' }
 
-  await setUserSession(user.id)
+  await setUserSession(user._id.toString())
 
   // Check if user has EV data
-  const evData = await db.get('SELECT * FROM ev_data WHERE userId = ?', [user.id])
+  const evData = await EvData.findOne({ userId: user._id }).lean()
   if (!evData) {
     redirect('/ev-setup')
   }
 
   // Check if user has health data
-  const healthData = await db.get('SELECT * FROM health_data WHERE userId = ?', [user.id])
+  const healthData = await HealthData.findOne({ userId: user._id }).lean()
   if (!healthData) {
     redirect('/health-setup')
   }
@@ -66,21 +61,24 @@ export async function registerAction(prevState: any, formData: FormData) {
   if (password !== confirm) return { error: 'Passwords do not match' }
   if (password.length < 6) return { error: 'Password must be at least 6 characters' }
 
-  const db = await openDb()
-  const existingUser = await db.get('SELECT id FROM users WHERE email = ?', [email])
+  await connectDB()
+  const existingUser = await User.findOne({ email }).lean()
   if (existingUser) return { error: 'Email already registered' }
 
   const profilePicFile = formData.get('profilePic') as File | null
-  const profilePicUrl = await uploadFile(profilePicFile, 'profile')
+  const profilePicUrl = await fileToBase64(profilePicFile)
 
   const hash = await bcrypt.hash(password, 10)
-  const result = await db.run(
-    'INSERT INTO users (name, email, password, profilePic) VALUES (?, ?, ?, ?)',
-    [name, email, hash, profilePicUrl]
-  )
+  
+  const newUser = await User.create({
+    name,
+    email,
+    password: hash,
+    profilePic: profilePicUrl
+  })
 
-  if (result.lastID) {
-    await setUserSession(result.lastID)
+  if (newUser && newUser._id) {
+    await setUserSession(newUser._id.toString())
     redirect('/ev-setup')
   }
 
@@ -107,27 +105,25 @@ export async function saveEvData(prevState: any, formData: FormData) {
     return { error: 'Please fill all fields properly' }
   }
 
-  const db = await openDb()
+  await connectDB()
 
   const carPicFile = formData.get('carPic') as File | null
-  let carPicUrl = await uploadFile(carPicFile, 'car')
+  let carPicUrl = await fileToBase64(carPicFile)
 
-  // check if exists
-  const exists = await db.get('SELECT id, carPic FROM ev_data WHERE userId = ?', [user.id])
+  const exists = await EvData.findOne({ userId: user.id })
   
   if (exists) {
     if (!carPicUrl && exists.carPic) {
       carPicUrl = exists.carPic // Keep existing if not uploaded new
     }
-    await db.run(
-      `UPDATE ev_data SET make = ?, model = ?, batteryCapacity = ?, currentCharge = ?, rangeAtFull = ?, carPic = ? WHERE userId = ?`,
-      [make, model, batteryCapacity, currentCharge, rangeAtFull, carPicUrl, user.id]
+    await EvData.updateOne(
+      { userId: user.id },
+      { make, model, batteryCapacity, currentCharge, rangeAtFull, carPic: carPicUrl }
     )
   } else {
-    await db.run(
-      `INSERT INTO ev_data (userId, make, model, batteryCapacity, currentCharge, rangeAtFull, carPic) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [user.id, make, model, batteryCapacity, currentCharge, rangeAtFull, carPicUrl]
-    )
+    await EvData.create({
+      userId: user.id, make, model, batteryCapacity, currentCharge, rangeAtFull, carPic: carPicUrl
+    })
   }
 
   revalidatePath('/dashboard')
@@ -145,26 +141,24 @@ export async function saveTripData(
   const user = await getUser()
   if (!user) return { error: 'Unauthorized' }
 
-  const db = await openDb()
-  const result = await db.run(
-    `INSERT INTO trips (userId, startLocation, endLocation, distance, estimatedTime, batteryUsed, chargingStops) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [user.id, startLocation, endLocation, distance, estimatedTime, batteryUsed, chargingStops]
-  )
-
-  // Also deduct battery from current charge (simulate trip completion)
-  // Optional depending on if they just "plan" or actually "log" the trip. Let's just create the trip for history.
+  await connectDB()
+  
+  const result = await Trip.create({
+    userId: user.id, startLocation, endLocation, distance, estimatedTime, batteryUsed, chargingStops
+  })
 
   revalidatePath('/dashboard')
   revalidatePath('/trip-planner')
-  return { success: true, tripId: result.lastID }
+  return { success: true, tripId: result._id.toString() }
 }
 
-export async function deleteTripAction(tripId: number) {
+export async function deleteTripAction(tripId: string) {
   const user = await getUser()
   if (!user) return { error: 'Unauthorized' }
 
-  const db = await openDb()
-  await db.run('DELETE FROM trips WHERE id = ? AND userId = ?', [tripId, user.id])
+  await connectDB()
+  await Trip.deleteOne({ _id: tripId, userId: user.id })
+  
   revalidatePath('/dashboard')
   revalidatePath('/trip-planner')
 }
@@ -181,19 +175,18 @@ export async function saveHealthData(prevState: any, formData: FormData) {
     return { error: 'Please fill all fields properly' }
   }
 
-  const db = await openDb()
-  const exists = await db.get('SELECT id FROM health_data WHERE userId = ?', [user.id])
+  await connectDB()
+  const exists = await HealthData.findOne({ userId: user.id })
   
   if (exists) {
-    await db.run(
-      `UPDATE health_data SET age = ?, healthCondition = ?, preferredRestInterval = ? WHERE userId = ?`,
-      [age, healthCondition, preferredRestInterval, user.id]
+    await HealthData.updateOne(
+      { userId: user.id },
+      { age, healthCondition, preferredRestInterval }
     )
   } else {
-    await db.run(
-      `INSERT INTO health_data (userId, age, healthCondition, preferredRestInterval) VALUES (?, ?, ?, ?)`,
-      [user.id, age, healthCondition, preferredRestInterval]
-    )
+    await HealthData.create({
+      userId: user.id, age, healthCondition, preferredRestInterval
+    })
   }
 
   revalidatePath('/dashboard')
@@ -223,3 +216,79 @@ export async function calculateTripData(
 
   return { drivingDistance, durationMinutes };
 }
+
+// ========================================================
+// TRANSLATED PYTHON PREDICTION ML ENGINE
+// ========================================================
+
+function calculateRange(battery: number, efficiency: number = 5) {
+    return battery * efficiency;
+}
+
+function calculateStops(distance: number, rangeKm: number) {
+    if (rangeKm === 0) return 0;
+    return Math.max(0, Math.ceil(distance / rangeKm) - 1);
+}
+
+function healthCheck(fatigue: string, sleep: number) {
+    if (sleep < 5) {
+        return "⚠️ Low sleep. Take frequent breaks.";
+    } else if (fatigue === "high") {
+        return "🚨 High fatigue. Avoid long driving.";
+    } else {
+        return "✅ You are fit to drive.";
+    }
+}
+
+function predictML(data: { battery: number, distance: number, fatigue: string, sleep: number }) {
+    const rangeKm = calculateRange(data.battery);
+    const result: any = {};
+    
+    if (rangeKm >= data.distance) {
+        result.status = "Reachable";
+        result.charging_required = false;
+        result.stops = 0;
+    } else {
+        result.status = "Charging Needed";
+        result.charging_required = true;
+        result.stops = calculateStops(data.distance, rangeKm);
+    }
+    
+    result.estimated_range = rangeKm;
+    result.health_advice = healthCheck(data.fatigue, data.sleep);
+    
+    return result;
+}
+
+export async function runPredictionAction(
+    battery: number, 
+    start: string, 
+    destination: string, 
+    sleep: number, 
+    fatigue: string
+) {
+    // Keep the existing hardcoded API key from the python project
+    const GOOGLE_API_KEY = "AIzaSyCKiutF3dUkcr06Vp9pti-ZQzzLvSAuwjI"; 
+    
+    try {
+        const response = await fetch(
+            `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(start)}&destinations=${encodeURIComponent(destination)}&key=${GOOGLE_API_KEY}`
+        );
+        const data = await response.json();
+        
+        if (data.rows && data.rows.length > 0 && data.rows[0].elements && data.rows[0].elements.length > 0 && data.rows[0].elements[0].status === "OK") {
+            const distanceMeters = data.rows[0].elements[0].distance.value;
+            const distanceKm = distanceMeters / 1000;
+            
+            const prediction = predictML({ battery, distance: distanceKm, fatigue, sleep });
+            
+            // Revalidate to ensure UI updates optionally, not strictly required here
+            return { success: true, distance: distanceKm, prediction };
+        } else {
+            return { error: "Google API issue or route not found" };
+        }
+    } catch(err: any) {
+        return { error: err.message || "Prediction failed" };
+    }
+}
+

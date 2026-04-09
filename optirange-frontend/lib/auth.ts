@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers'
 import jwt from 'jsonwebtoken'
-import { openDb } from './db'
+import { connectDB } from './db'
+import { User } from './models'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'optirange-super-secret-key-2026'
 
@@ -29,10 +30,11 @@ export async function getUser() {
     return null
   }
 
-  const db = await openDb()
-  const user = await db.get('SELECT id, name, email, profilePic FROM users WHERE id = ?', [decoded.id])
+  await connectDB()
+  const user = await User.findById(decoded.id).select('_id name email profilePic').lean() as any;
   
   if (!user) return null
+  user.id = user._id.toString(); // Map _id to id for backwards compatibility
   return user
 }
 
@@ -41,8 +43,8 @@ export async function clearUserSession() {
   cookieStore.delete('auth-token')
 }
 
-export async function setUserSession(userId: number) {
-  const token = await signToken({ id: userId })
+export async function setUserSession(userId: string | number) {
+  const token = await signToken({ id: userId.toString() })
   const cookieStore = await cookies()
   cookieStore.set('auth-token', token, {
     httpOnly: true,

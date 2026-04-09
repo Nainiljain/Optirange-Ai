@@ -1,70 +1,16 @@
-import sqlite3 from 'sqlite3'
-import { open, Database } from 'sqlite'
+import mongoose from 'mongoose';
 
-let db: Database | null = null
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/optirange";
 
-export async function openDb() {
-  if (!db) {
-    db = await open({
-      filename: './optirange.db',
-      driver: sqlite3.Database
-    })
-    
-    // Initialize tables
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        email TEXT UNIQUE,
-        password TEXT,
-        profilePic TEXT,
-        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      CREATE TABLE IF NOT EXISTS ev_data (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        userId INTEGER,
-        make TEXT,
-        model TEXT,
-        batteryCapacity REAL,
-        currentCharge REAL,
-        rangeAtFull REAL,
-        carPic TEXT,
-        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(userId) REFERENCES users(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS health_data (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        userId INTEGER UNIQUE,
-        age INTEGER,
-        healthCondition TEXT,
-        preferredRestInterval INTEGER,
-        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(userId) REFERENCES users(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS trips (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        userId INTEGER,
-        startLocation TEXT,
-        endLocation TEXT,
-        distance REAL,
-        estimatedTime TEXT,
-        batteryUsed REAL,
-        chargingStops INTEGER,
-        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(userId) REFERENCES users(id)
-      );
-    `)
-
-    try {
-      await db.run("ALTER TABLE users ADD COLUMN profilePic TEXT");
-    } catch (e) {}
-
-    try {
-      await db.run("ALTER TABLE ev_data ADD COLUMN carPic TEXT");
-    } catch (e) {}
+export async function connectDB() {
+  if (mongoose.connection.readyState >= 1) {
+    return;
   }
-  return db
+  
+  try {
+    await mongoose.connect(MONGODB_URI);
+    console.log("Connected to MongoDB via Mongoose");
+  } catch (err) {
+    console.error("MongoDB connection error:", err);
+  }
 }

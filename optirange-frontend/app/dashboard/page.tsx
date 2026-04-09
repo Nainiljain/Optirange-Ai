@@ -2,7 +2,8 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { Zap, Map, Battery, Clock, ChevronRight, Activity, Calendar, ArrowRight, Settings2, LogOut } from "lucide-react"
 import { getUser } from "@/lib/auth"
-import { openDb } from "@/lib/db"
+import { connectDB } from "@/lib/db"
+import { EvData, HealthData, Trip } from "@/lib/models"
 import { logoutAction } from "@/app/actions"
 
 export default async function Dashboard() {
@@ -11,18 +12,18 @@ export default async function Dashboard() {
     redirect('/login')
   }
 
-  const db = await openDb()
-  const evData = await db.get('SELECT * FROM ev_data WHERE userId = ?', [user.id])
+  await connectDB()
+  const evData = await EvData.findOne({ userId: user.id }).lean() as any
   if (!evData) {
     redirect('/ev-setup')
   }
 
-  const healthData = await db.get('SELECT * FROM health_data WHERE userId = ?', [user.id])
+  const healthData = await HealthData.findOne({ userId: user.id }).lean() as any
   if (!healthData) {
     redirect('/health-setup')
   }
 
-  const trips = await db.all('SELECT * FROM trips WHERE userId = ? ORDER BY createdAt DESC LIMIT 5', [user.id])
+  const trips = await Trip.find({ userId: user.id }).sort({ createdAt: -1 }).limit(5).lean() as any[]
 
   const totalInteractions = trips.length
   const totalDistance = trips.reduce((acc, t) => acc + t.distance, 0).toFixed(0)
@@ -173,7 +174,7 @@ export default async function Dashboard() {
           <div className="glass-panel rounded-2xl overflow-hidden">
             <div className="divide-y divide-border">
               {trips.length > 0 ? trips.map((trip: any) => (
-                <div key={trip.id} className="p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4 hover:bg-secondary/50 transition-colors">
+                <div key={trip._id.toString()} className="p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4 hover:bg-secondary/50 transition-colors">
                   <div className="flex items-center gap-4 w-full sm:w-auto">
                     <div className="p-3 bg-background rounded-xl border border-border">
                       <Map className="h-6 w-6 text-blue-500" />

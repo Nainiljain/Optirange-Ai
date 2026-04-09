@@ -2,7 +2,8 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { Zap, Map, MapPin, Activity, Settings2, LogOut } from "lucide-react"
 import { getUser } from "@/lib/auth"
-import { openDb } from "@/lib/db"
+import { connectDB } from "@/lib/db"
+import { EvData, HealthData } from "@/lib/models"
 import { logoutAction } from "@/app/actions"
 import TripPlannerClient from "./TripPlannerClient"
 
@@ -12,13 +13,13 @@ export default async function TripPlanner() {
     redirect('/login')
   }
 
-  const db = await openDb()
-  const evData = await db.get('SELECT * FROM ev_data WHERE userId = ?', [user.id])
+  await connectDB()
+  const evData = await EvData.findOne({ userId: user.id }).lean() as any
   if (!evData) {
     redirect('/ev-setup')
   }
 
-  const healthData = await db.get('SELECT * FROM health_data WHERE userId = ?', [user.id])
+  const healthData = await HealthData.findOne({ userId: user.id }).lean() as any
   if (!healthData) {
     redirect('/health-setup')
   }

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Zap, MapPin, Navigation, Battery, Activity } from "lucide-react";
+import { runPredictionAction } from "@/app/actions";
 
 export default function MLPredictorTest() {
     const [battery, setBattery] = useState("");
@@ -19,27 +20,13 @@ export default function MLPredictorTest() {
         setError("");
         
         try {
-            const response = await fetch("http://localhost:5000/api/predict", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    battery: Number(battery),
-                    start,
-                    destination,
-                    sleep: Number(sleep),
-                    fatigue
-                })
-            });
+            const res = await runPredictionAction(Number(battery), start, destination, Number(sleep), fatigue);
 
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.error || "Failed to fetch prediction");
+            if (res.error) {
+                throw new Error(res.error);
             }
 
-            const data = await response.json();
-            setResult(data);
+            setResult({ distance: res.distance || 0, prediction: res.prediction });
         } catch (err: any) {
             console.error(err);
             setError(err.message || "An error occurred");
@@ -178,7 +165,7 @@ export default function MLPredictorTest() {
                 )}
             </div>
             <p className="mt-8 text-foreground/40 font-medium max-w-lg text-center text-sm">
-                This is a dedicated interface for the <code>http://localhost:5000/api/predict</code> Express backend + Python ML integration.
+                This ML Predictor now runs entirely natively inside Next.js via Server Actions! The external backend is no longer required.
             </p>
         </div>
     );

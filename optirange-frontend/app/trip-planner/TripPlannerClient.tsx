@@ -8,7 +8,6 @@ import {
   fetchNRCanStationsAction,
 } from "@/app/actions";
 import {
-  interpolateWaypoints,
   type ChargingStation,
 } from "@/lib/tripUtils";
 import {
@@ -142,11 +141,29 @@ export default function TripPlannerClient({
         maxStretch = maxStretch * 0.9;
       }
 
-      // NRCan Charging Stations
+      // 1. Calculate stopping points dynamically based on actual range and constraints
+      const stopDistances: number[] = [];
+      let tempRemainingDist = distance;
+      let tempCurrentRange = effectiveRange;
+      let cumulativeDist = 0;
+
+      for (let i = 0; i < numStops && tempRemainingDist > 0; i++) {
+        const distToStop = Math.min(tempCurrentRange - 20, maxStretch);
+        cumulativeDist += distToStop;
+        tempRemainingDist -= distToStop;
+        if (tempRemainingDist <= 0) break;
+        stopDistances.push(cumulativeDist);
+        
+        const isRestStop = distToStop === maxStretch && distToStop < (tempCurrentRange - 20);
+        tempCurrentRange = isRestStop ? effectiveRange * 0.5 : effectiveRange * 0.8;
+      }
+
       setLoadingStep("Fetching real charging stations from NRCan…");
-      const waypointCoords = numStops > 0
-        ? interpolateWaypoints(sCoords.lat, sCoords.lon, dCoords.lat, dCoords.lon, numStops)
-        : [];
+      // Generate waypoints at exact physical fractional locations calculated above
+      const waypointCoords = stopDistances.map(d => ({
+        lat: sCoords.lat + (dCoords.lat - sCoords.lat) * (d / distance),
+        lon: sCoords.lon + (dCoords.lon - sCoords.lon) * (d / distance),
+      }));
 
       let nrcanStations: ChargingStation[][] = [];
       if (waypointCoords.length > 0) {
@@ -158,26 +175,37 @@ export default function TripPlannerClient({
       const stops: Stop[] = [];
       let remainingDist = distance;
       let currentRange = effectiveRange;
+      const usedStationIds = new Set<string>();
 
-      for (let i = 0; i < numStops && remainingDist > 0; i++) {
+      for (let i = 0; i < stopDistances.length; i++) {
         const distToStop = Math.min(currentRange - 20, maxStretch);
         remainingDist -= distToStop;
-        if (remainingDist <= 0) break;
 
         const isRestStop = distToStop === maxStretch && distToStop < (currentRange - 20);
         const chargeTo = isRestStop ? "50%" : "80%";
         const chargeTime = isRestStop ? "15 mins (Rest & top-up)" : "25 mins (Fast Charge)";
 
         const stationOptions = nrcanStations[i] || [];
-        const bestStation = isRestStop
-          ? stationOptions[0]
-          : stationOptions.find(s => s.dcFastPorts > 0) || stationOptions[0];
+        
+        let bestStation = undefined;
+        if (isRestStop) {
+            bestStation = stationOptions.find(s => !usedStationIds.has(s.id)) || stationOptions[0];
+        } else {
+            bestStation = stationOptions.find(s => s.dcFastPorts > 0 && !usedStationIds.has(s.id)) 
+                          || stationOptions.find(s => !usedStationIds.has(s.id)) 
+                          || stationOptions.find(s => s.dcFastPorts > 0) 
+                          || stationOptions[0];
+        }
+
+        if (bestStation && bestStation.id) {
+            usedStationIds.add(bestStation.id);
+        }
 
         stops.push({
           name: bestStation ? bestStation.name : (isRestStop ? `Rest Stop ${i+1}` : `FastCharge Node ${i+1}`),
           location: bestStation
             ? `${bestStation.address}${bestStation.city ? ', ' + bestStation.city : ''}${bestStation.province ? ', ' + bestStation.province : ''}`
-            : `Near route milestone ${Math.floor(distance - remainingDist)} mi`,
+            : `Near route milestone ${Math.floor(stopDistances[i])} mi`,
           arriveWith: isRestStop ? `${Math.floor(((currentRange - distToStop) / effectiveRange) * 100)}%` : "15%",
           chargeTime,
           chargeTo,

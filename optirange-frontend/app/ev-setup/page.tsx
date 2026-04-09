@@ -96,7 +96,6 @@ function EvSetupContent() {
   const handleLookupMakeChange = (make: string) => {
     setLookupMake(make)
     setLookupModel('')
-    setSpecs && null  // reset – handled by hook
     setAutoFilled(false)
     if (make) fetchModels(make)
   }

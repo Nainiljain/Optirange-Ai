@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Zap, MapPin, Navigation, Battery, Activity } from "lucide-react";
-import { runPredictionAction } from "@/app/actions";
+import { runMLPredictionAction } from "@/app/actions";
 
 export default function MLPredictorTest() {
     const [battery, setBattery] = useState("");
@@ -20,7 +20,7 @@ export default function MLPredictorTest() {
         setError("");
         
         try {
-            const res = await runPredictionAction(Number(battery), start, destination, Number(sleep), fatigue);
+            const res = await runMLPredictionAction(Number(battery), start, destination, Number(sleep), fatigue);
 
             if (res.error) {
                 throw new Error(res.error);

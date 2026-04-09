@@ -457,7 +457,15 @@ export async function fetchNRCanStationsAction(
             network: s.ev_network || s.owner_type_code || 'Unknown',
             distanceKm: s.distance ? parseFloat(s.distance) : undefined,
           }))
-          .sort((a: any, b: any) => (b.dcFastPorts - a.dcFastPorts));
+          .sort((a: any, b: any) => {
+            const aHasDC = a.dcFastPorts > 0;
+            const bHasDC = b.dcFastPorts > 0;
+            if (aHasDC && !bHasDC) return -1;
+            if (!aHasDC && bHasDC) return 1;
+            const distA = a.distanceKm || 999;
+            const distB = b.distanceKm || 999;
+            return distA - distB;
+          });
 
         stationsAtWaypoint.push(...sorted.slice(0, 3));
       }

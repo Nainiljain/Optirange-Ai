@@ -1,5 +1,5 @@
 import { getUser } from "@/lib/auth";
-import HomeClient from "./HomeClient";
+import HomeClient from "@/app/HomeClient";
 
 export default async function Home() {
   const user = await getUser();

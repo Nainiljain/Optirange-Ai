@@ -3,6 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import bcrypt from 'bcryptjs'
+import { interpolateWaypoints, type ChargingStation } from '@/lib/tripUtils'
+export type { ChargingStation } from '@/lib/tripUtils'
 import { connectDB } from '@/lib/db'
 import { User, EvData, HealthData, Trip } from '@/lib/models'
 import { getUser, setUserSession, clearUserSession } from '@/lib/auth'
@@ -95,11 +97,13 @@ export async function saveEvData(prevState: any, formData: FormData) {
   const user = await getUser()
   if (!user) return { error: 'Unauthorized' }
 
-  const make = formData.get('make') as string
-  const model = formData.get('model') as string
-  const batteryCapacity = Number(formData.get('batteryCapacity'))
-  const rangeAtFull = Number(formData.get('rangeAtFull'))
-  const currentCharge = batteryCapacity // Start at full charge by default
+  const make             = formData.get('make') as string
+  const model            = formData.get('model') as string
+  const nickname         = (formData.get('nickname') as string) || ''
+  const batteryCapacity  = Number(formData.get('batteryCapacity'))
+  const rangeAtFull      = Number(formData.get('rangeAtFull'))
+  const editId           = formData.get('editId') as string | null
+  const currentCharge    = batteryCapacity
 
   if (!make || !model || !batteryCapacity || !rangeAtFull) {
     return { error: 'Please fill all fields properly' }
@@ -110,24 +114,47 @@ export async function saveEvData(prevState: any, formData: FormData) {
   const carPicFile = formData.get('carPic') as File | null
   let carPicUrl = await fileToBase64(carPicFile)
 
-  const exists = await EvData.findOne({ userId: user.id })
-  
-  if (exists) {
-    if (!carPicUrl && exists.carPic) {
-      carPicUrl = exists.carPic // Keep existing if not uploaded new
-    }
+  if (editId) {
+    // Editing an existing car
+    const existing = await EvData.findOne({ _id: editId, userId: user.id })
+    if (!existing) return { error: 'Car not found' }
+    if (!carPicUrl && existing.carPic) carPicUrl = existing.carPic
     await EvData.updateOne(
-      { userId: user.id },
-      { make, model, batteryCapacity, currentCharge, rangeAtFull, carPic: carPicUrl }
+      { _id: editId },
+      { make, model, nickname, batteryCapacity, currentCharge, rangeAtFull, carPic: carPicUrl }
     )
   } else {
+    // Always create a new car entry — supports multi-car garage
     await EvData.create({
-      userId: user.id, make, model, batteryCapacity, currentCharge, rangeAtFull, carPic: carPicUrl
+      userId: user.id, make, model, nickname, batteryCapacity, currentCharge, rangeAtFull, carPic: carPicUrl
     })
   }
 
   revalidatePath('/dashboard')
-  redirect('/health-setup')
+  revalidatePath('/trip-planner')
+
+  // Only redirect to health-setup if this is the very first car
+  const carCount = await EvData.countDocuments({ userId: user.id })
+  const hasHealth = await (await import('@/lib/models')).HealthData.findOne({ userId: user.id })
+  if (carCount === 1 && !hasHealth) redirect('/health-setup')
+  redirect('/dashboard')
+}
+
+export async function deleteEvAction(evId: string) {
+  const user = await getUser()
+  if (!user) return { error: 'Unauthorized' }
+
+  await connectDB()
+
+  // Safety: ensure at least one car remains after delete
+  const count = await EvData.countDocuments({ userId: user.id })
+  if (count <= 1) return { error: 'You must keep at least one vehicle' }
+
+  await EvData.deleteOne({ _id: evId, userId: user.id })
+
+  revalidatePath('/dashboard')
+  revalidatePath('/trip-planner')
+  return { success: true }
 }
 
 export async function saveTripData(
@@ -197,24 +224,39 @@ export async function calculateTripData(
   startLat: number, startLon: number, 
   destLat: number, destLon: number
 ) {
-  // Haversine formula to mathematically compute exact spherical earth distance
-  const R = 3958.8; // Radius of the Earth in miles
+  const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+
+  // ── Primary: Google Maps Distance Matrix API (real driving distance + duration) ──
+  if (GOOGLE_API_KEY && !GOOGLE_API_KEY.startsWith('YOUR_')) {
+    try {
+      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${startLat},${startLon}&destinations=${destLat},${destLon}&key=${GOOGLE_API_KEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const elem = data?.rows?.[0]?.elements?.[0];
+      if (elem?.status === 'OK') {
+        const drivingDistance = Math.round(elem.distance.value / 1609.34); // metres → miles
+        const durationMinutes = Math.round(elem.duration.value / 60);
+        return { drivingDistance, durationMinutes, source: 'google_maps' };
+      }
+    } catch (e) {
+      console.error('[calculateTripData] Google Maps API error, falling back to Haversine:', e);
+    }
+  }
+
+  // ── Fallback: Haversine + driving-distance multiplier ──
+  const R = 3958.8;
   const dLat = (destLat - startLat) * (Math.PI / 180);
   const dLon = (destLon - startLon) * (Math.PI / 180);
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(startLat * (Math.PI / 180)) * Math.cos(destLat * (Math.PI / 180)) * 
-            Math.sin(dLon / 2) * Math.sin(dLon / 2); 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)); 
-  const crowFliesDistance = R * c; 
-  
-  // Driving distances naturally curve and route. Applying standard ~25% detour multiplier makes it incredibly accurate
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(startLat * (Math.PI / 180)) *
+      Math.cos(destLat * (Math.PI / 180)) *
+      Math.sin(dLon / 2) ** 2;
+  const crowFliesDistance = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   let drivingDistance = Math.round(crowFliesDistance * 1.25);
   if (drivingDistance < 1) drivingDistance = 1;
-
-  // Assuming average travel speeds factoring in highways vs local (approx 55mph average)
   const durationMinutes = Math.round((drivingDistance / 55) * 60);
-
-  return { drivingDistance, durationMinutes };
+  return { drivingDistance, durationMinutes, source: 'haversine' };
 }
 
 // ========================================================
@@ -260,7 +302,7 @@ function predictML(data: { battery: number, distance: number, fatigue: string, s
     return result;
 }
 
-export async function runPredictionAction(
+export async function runMLPredictionAction(
     battery: number, 
     start: string, 
     destination: string, 
@@ -292,3 +334,156 @@ export async function runPredictionAction(
     }
 }
 
+
+// ========================================================
+// ML PREDICTION — directly called from TripPlannerClient
+// Takes distance in miles (converted to km internally) and
+// returns ML model output including health advice
+// ========================================================
+
+export async function runMLPredictionDirect(
+  batteryCapacityKwh: number,
+  distanceMiles: number,
+  weatherPenalty: number,
+  healthData: { healthCondition?: string; preferredRestInterval?: number } | null
+): Promise<{
+  status: string;
+  charging_required: boolean;
+  stops: number;
+  estimated_range_miles: number;
+  health_advice: string;
+  effective_range_miles: number;
+}> {
+  // Convert EV battery capacity + efficiency to estimated range in km
+  // Standard EV efficiency: ~5 km/kWh average  
+  const rangeKm = calculateRange(batteryCapacityKwh);
+  const distanceKm = distanceMiles * 1.60934;
+
+  // Apply weather penalty to effective range
+  const effectiveRangeKm = rangeKm * (1 - weatherPenalty);
+
+  // Health-based fatigue proxy from health profile
+  const condition = healthData?.healthCondition || 'none';
+  const fatigueLookup: Record<string, string> = {
+    chronic_fatigue: 'high',
+    back_pain: 'medium',
+    pregnancy: 'medium',
+    bladder: 'medium',
+    none: 'low',
+  };
+  const fatigue = fatigueLookup[condition] || 'low';
+
+  // Default healthy sleep hours
+  const sleep = 7;
+
+  const mlResult = predictML({
+    battery: batteryCapacityKwh,
+    distance: distanceKm,
+    fatigue,
+    sleep,
+  });
+
+  return {
+    status: mlResult.status,
+    charging_required: mlResult.charging_required,
+    stops: calculateStops(distanceKm, effectiveRangeKm),
+    estimated_range_miles: Math.round((mlResult.estimated_range / 1.60934) * (1 - weatherPenalty)),
+    health_advice: mlResult.health_advice,
+    effective_range_miles: Math.round(effectiveRangeKm / 1.60934),
+  };
+}
+
+
+// ========================================================
+// NRCan CHARGING STATIONS — real-world station data from
+// Natural Resources Canada federal EV station database
+// No API key required. Covers all of Canada.
+// Fallback to NREL AFDC (DEMO_KEY) for US-side routes.
+// ========================================================
+
+export async function fetchNRCanStationsAction(
+  waypoints: Array<{ lat: number; lon: number }>
+): Promise<ChargingStation[][]> {
+  const results: ChargingStation[][] = [];
+
+  for (const wp of waypoints) {
+    const stationsAtWaypoint: ChargingStation[] = [];
+
+    // ── Primary: NRCan EVCS (Canadian stations) ──────────────────────────────
+    try {
+      const nrcanUrl =
+        `${process.env.NRCAN_EVCS_URL || 'https://chargepoints.ped.nrcan.gc.ca/api/crs/fmt/json'}` +
+        `?lang=en&lat=${wp.lat}&lng=${wp.lon}&dist=25`;
+
+      const nrcanRes = await fetch(nrcanUrl, { next: { revalidate: 3600 } });
+
+      if (nrcanRes.ok) {
+        const nrcanData = await nrcanRes.json();
+        const rawStations: any[] = nrcanData?.fuel_stations || [];
+
+        // Prefer DCFC stations, sort by distance, take top 3
+        const sorted = rawStations
+          .filter((s: any) => s.latitude && s.longitude)
+          .map((s: any) => ({
+            id: `nrcan-${s.id || s.hy_objectid}`,
+            name: s.station_name || s.name || 'Charging Station',
+            address: s.street_address || s.address || '',
+            city: s.city || '',
+            province: s.state || s.province || '',
+            lat: parseFloat(s.latitude),
+            lon: parseFloat(s.longitude),
+            level2Ports: parseInt(s.ev_level2_evse_num) || 0,
+            dcFastPorts: parseInt(s.ev_dc_fast_num) || 0,
+            network: s.ev_network || s.owner_type_code || 'Unknown',
+            distanceKm: s.distance ? parseFloat(s.distance) : undefined,
+          }))
+          .sort((a: any, b: any) => (b.dcFastPorts - a.dcFastPorts));
+
+        stationsAtWaypoint.push(...sorted.slice(0, 3));
+      }
+    } catch (e) {
+      console.error('[NRCan] Fetch error:', e);
+    }
+
+    // ── Fallback: NREL AFDC (US + Canada) ────────────────────────────────────
+    if (stationsAtWaypoint.length === 0) {
+      try {
+        const nrelKey = process.env.NREL_API_KEY || 'DEMO_KEY';
+        const nrelUrl =
+          `https://developer.nrel.gov/api/alt-fuel-stations/v1.json` +
+          `?api_key=${nrelKey}&fuel_type=ELEC&latitude=${wp.lat}&longitude=${wp.lon}` +
+          `&radius=15&limit=3&ev_level=dc_fast&status=E`;
+
+        const nrelRes = await fetch(nrelUrl, { next: { revalidate: 3600 } });
+
+        if (nrelRes.ok) {
+          const nrelData = await nrelRes.json();
+          const raw: any[] = nrelData?.fuel_stations || [];
+
+          stationsAtWaypoint.push(
+            ...raw.map((s: any) => ({
+              id: `nrel-${s.id}`,
+              name: s.station_name || 'Charging Station',
+              address: s.street_address || '',
+              city: s.city || '',
+              province: s.state || '',
+              lat: s.latitude,
+              lon: s.longitude,
+              level2Ports: s.ev_level2_evse_num || 0,
+              dcFastPorts: s.ev_dc_fast_num || 0,
+              network: s.ev_network || 'Unknown',
+            }))
+          );
+        }
+      } catch (e) {
+        console.error('[NREL] Fetch error:', e);
+      }
+    }
+
+    results.push(stationsAtWaypoint);
+  }
+
+  return results;
+}
+
+// interpolateWaypoints moved to @/lib/tripUtils — import from there

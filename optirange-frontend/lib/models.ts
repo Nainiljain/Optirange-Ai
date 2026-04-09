@@ -4,18 +4,20 @@ const UserSchema = new Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  profilePic: { type: String }, // Base64 string for images
+  profilePic: { type: String },
   createdAt: { type: Date, default: Date.now },
 });
 
 const EvDataSchema = new Schema({
-  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  // NOTE: unique removed — one user can have multiple cars
+  nickname: { type: String, default: '' }, // e.g. "Daily Driver", "Road Trip Car"
   make: { type: String },
   model: { type: String },
   batteryCapacity: { type: Number },
   currentCharge: { type: Number },
   rangeAtFull: { type: Number },
-  carPic: { type: String }, // Base64 string for images
+  carPic: { type: String },
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -29,6 +31,7 @@ const HealthDataSchema = new Schema({
 
 const TripSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  evId: { type: Schema.Types.ObjectId, ref: 'EvData' }, // which car was used
   startLocation: { type: String },
   endLocation: { type: String },
   distance: { type: Number },

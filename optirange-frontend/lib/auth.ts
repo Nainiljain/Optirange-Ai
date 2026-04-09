@@ -34,8 +34,15 @@ export async function getUser() {
   const user = await User.findById(decoded.id).select('_id name email profilePic').lean() as any;
   
   if (!user) return null
-  user.id = user._id.toString(); // Map _id to id for backwards compatibility
-  return user
+
+  // Return a fully serialised plain object — safe to pass to Client Components
+  return {
+    id:         user._id.toString(),
+    _id:        user._id.toString(),
+    name:       user.name       ?? '',
+    email:      user.email      ?? '',
+    profilePic: user.profilePic ?? null,
+  }
 }
 
 export async function clearUserSession() {

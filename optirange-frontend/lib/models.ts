@@ -26,6 +26,8 @@ const HealthDataSchema = new Schema({
   age: { type: Number },
   healthCondition: { type: String },
   preferredRestInterval: { type: Number },
+  sleepStatus: { type: String },
+  otherChallenges: { type: String },
   createdAt: { type: Date, default: Date.now },
 });
 

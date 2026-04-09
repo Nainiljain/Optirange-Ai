@@ -31,7 +31,14 @@ export async function getUser() {
   }
 
   await connectDB()
-  const user = await User.findById(decoded.id).select('_id name email profilePic').lean() as any;
+  
+  let user;
+  try {
+    user = await User.findById(decoded.id).select('_id name email profilePic').lean() as any;
+  } catch (err) {
+    // Gracefully handle SQLite "1" IDs crashing MongoDB ObjectID casting
+    return null;
+  }
   
   if (!user) return null
 

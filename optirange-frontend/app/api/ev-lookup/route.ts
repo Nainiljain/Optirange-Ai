@@ -123,7 +123,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ source: 'carapi', data: normalised });
       }
     } catch (err: any) {
-      console.error('[ev-lookup] CarAPI error, falling back to NREL:', err.message);
+      // CarAPI is deprecated/failing — silently fall back to NREL
     }
   }
 
@@ -142,15 +142,17 @@ export async function GET(req: NextRequest) {
     }
 
     const params = new URLSearchParams({
-      api_key: nrelKey,
-      fuel_type: 'ELEC',
-      ...(make  && { make }),
-      ...(model && { model }),
+      api_key: nrelKey
     });
 
-    const res  = await fetch(`${NREL_BASE}?${params}`, { next: { revalidate: 86400 } });
+    const res  = await fetch(`${NREL_BASE}?${params}`, { cache: 'no-store' });
     const raw  = await res.json();
-    const list: any[] = raw?.result || [];
+    let list: any[] = raw?.result || [];
+
+    // NREL uses 'fuel_name' and 'manufacturer_name' rather than 'make'
+    list = list.filter((v: any) => v.fuel_name?.includes('Electric'));
+    if (make) list = list.filter((v: any) => v.manufacturer_name?.toLowerCase() === make.toLowerCase());
+    if (model) list = list.filter((v: any) => v.model?.toLowerCase() === model.toLowerCase());
 
     if (action === 'models') {
       const unique = [...new Set(list.map((v: any) => v.model))].filter(Boolean);
@@ -160,15 +162,15 @@ export async function GET(req: NextRequest) {
     if (action === 'specs') {
       const normalised = list.map((v: any) => ({
         id:                 v.id,
-        year:               v.year || parseInt(year),
-        make:               v.make,
+        year:               v.model_year || parseInt(year),
+        make:               v.manufacturer_name,
         model:              v.model,
-        trim:               v.category?.trim || '',
-        batteryCapacityKwh: null,
-        rangeKm:            v.range ? Math.round(v.range * 1.60934) : null,
-        rangeMiles:         v.range || null,
-        chargerType:        v.ev_connector_type || null,
-        driveType:          v.category?.drive || null,
+        trim:               v.engine_description || v.drivetrain || '',
+        batteryCapacityKwh: v.battery_capacity_kwh ? parseFloat(v.battery_capacity_kwh) : null,
+        rangeKm:            (v.total_range || v.electric_range) ? Math.round(parseFloat(v.total_range || v.electric_range) * 1.60934) : null,
+        rangeMiles:         (v.total_range || v.electric_range) ? parseFloat(v.total_range || v.electric_range) : null,
+        chargerType:        v.charging_speed_dc_fast ? 'DC Fast' : 'Level 2',
+        driveType:          v.drivetrain || null,
       })).filter((v: any) => v.rangeMiles);
       return NextResponse.json({ source: 'nrel', data: normalised });
     }

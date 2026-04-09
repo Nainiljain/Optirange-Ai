@@ -43,6 +43,7 @@ export default function TripPlannerClient({
   const [loadingStep, setLoadingStep] = useState("");
   const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
   const [batteryPct, setBatteryPct] = useState<number | "">(80);
+  const [isStarting, setIsStarting] = useState(false);
 
   const [startSuggestions, setStartSuggestions] = useState<any[]>([]);
   const [destSuggestions, setDestSuggestions] = useState<any[]>([]);
@@ -196,7 +197,6 @@ export default function TripPlannerClient({
 
       setRouteResult(result);
       sessionStorage.setItem("currentRoute", JSON.stringify(result));
-      await saveTripData(start, destination, distance, timeStr, batteryUsed, stops.length);
     } catch (err) {
       console.error(err);
     } finally {
@@ -476,9 +476,18 @@ export default function TripPlannerClient({
                   <div className="w-px h-8 bg-border hidden lg:block" />
                   <div className="hidden lg:block"><p className="text-xs text-foreground/50 font-semibold mb-0.5">Stops</p><p className="font-bold text-lg">{routeResult.stops.length}</p></div>
                 </div>
-                <button type="button" onClick={() => window.location.href = "/live-map"}
-                  className="bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 px-5 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 shrink-0">
-                  <Navigation className="h-4 w-4" /> Start Trip
+                <button type="button" disabled={isStarting} onClick={async () => {
+                  setIsStarting(true);
+                  try {
+                    await saveTripData(start, destination, routeResult.distance, routeResult.timeStr, routeResult.batteryUsed, routeResult.stops.length);
+                    window.location.href = "/live-map";
+                  } catch (e) {
+                    console.error(e);
+                    setIsStarting(false);
+                  }
+                }}
+                  className="bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 px-5 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 shrink-0 disabled:opacity-50">
+                  {isStarting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="h-4 w-4" />} Start Trip
                 </button>
               </div>
             </div>

@@ -4,8 +4,11 @@ import Link from "next/link";
 import { ArrowRight, MapPin, Zap, ShieldCheck, LogOut } from "lucide-react";
 import { motion } from "framer-motion";
 import { logoutAction } from "./actions";
+import { useTransition } from "react";
 
 export default function HomeClient({ user }: { user: any }) {
+  const [isPending, startTransition] = useTransition();
+
   return (
     <div className="flex min-h-screen flex-col bg-background font-sans text-foreground overflow-hidden">
       {/* Background decorations */}
@@ -16,7 +19,7 @@ export default function HomeClient({ user }: { user: any }) {
       <motion.nav 
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="relative z-10 flex items-center justify-between px-8 py-6 max-w-7xl w-full mx-auto"
+        className="relative z-50 flex items-center justify-between px-8 py-6 max-w-7xl w-full mx-auto"
       >
         <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <div className="p-2 bg-blue-500/10 rounded-xl">
@@ -26,15 +29,14 @@ export default function HomeClient({ user }: { user: any }) {
         </Link>
         <div className="flex items-center gap-6">
           {user ? (
-            <form action={logoutAction}>
-              <button
-                type="submit"
-                className="text-sm font-bold flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 px-6 py-3 rounded-xl transition-all shadow-lg text-center"
-              >
-                <LogOut className="h-4 w-4" />
-                Sign Out
-              </button>
-            </form>
+            <button
+              onClick={() => startTransition(async () => { await logoutAction() })}
+              disabled={isPending}
+              className="text-sm font-bold flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 px-6 py-3 rounded-xl transition-all shadow-lg text-center disabled:opacity-50"
+            >
+              <LogOut className="h-4 w-4" />
+              {isPending ? 'Signing Out...' : 'Sign Out'}
+            </button>
           ) : (
             <Link
               href="/register"

@@ -90,7 +90,7 @@ export async function registerAction(prevState: any, formData: FormData) {
 export async function logoutAction() {
   await clearUserSession()
   revalidatePath('/', 'layout')
-  redirect('/')
+  redirect('/login')
 }
 
 export async function saveEvData(prevState: any, formData: FormData) {
@@ -157,6 +157,15 @@ export async function deleteEvAction(evId: string) {
   return { success: true }
 }
 
+export async function getEvByIdAction(editId: string) {
+  const user = await getUser()
+  if (!user) return null
+  await connectDB()
+  const ev = await EvData.findOne({ _id: editId, userId: user.id }).lean() as any
+  if (!ev) return null
+  return { ...ev, _id: ev._id.toString(), userId: ev.userId.toString() }
+}
+
 export async function saveTripData(
   startLocation: string,
   endLocation: string,
@@ -197,6 +206,8 @@ export async function saveHealthData(prevState: any, formData: FormData) {
   const age = Number(formData.get('age'))
   const healthCondition = formData.get('healthCondition') as string
   const preferredRestInterval = Number(formData.get('preferredRestInterval'))
+  const sleepStatus = formData.get('sleepStatus') as string || ''
+  const otherChallenges = formData.get('otherChallenges') as string || ''
 
   if (!age || !healthCondition || !preferredRestInterval) {
     return { error: 'Please fill all fields properly' }
@@ -208,16 +219,25 @@ export async function saveHealthData(prevState: any, formData: FormData) {
   if (exists) {
     await HealthData.updateOne(
       { userId: user.id },
-      { age, healthCondition, preferredRestInterval }
+      { age, healthCondition, preferredRestInterval, sleepStatus, otherChallenges }
     )
   } else {
     await HealthData.create({
-      userId: user.id, age, healthCondition, preferredRestInterval
+      userId: user.id, age, healthCondition, preferredRestInterval, sleepStatus, otherChallenges
     })
   }
 
   revalidatePath('/dashboard')
   redirect('/dashboard')
+}
+
+export async function getHealthDataAction() {
+  const user = await getUser()
+  if (!user) return null
+  await connectDB()
+  const data = await HealthData.findOne({ userId: user.id }).lean() as any
+  if (!data) return { name: user.name, isExisting: false }
+  return { ...data, _id: data._id.toString(), userId: data.userId.toString(), name: user.name, isExisting: true }
 }
 
 export async function calculateTripData(

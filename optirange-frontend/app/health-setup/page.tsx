@@ -1,14 +1,39 @@
 'use client'
 
-import { useActionState } from 'react'
-import { saveHealthData } from '@/app/actions'
+import { useActionState, useState, useEffect } from 'react'
+import { saveHealthData, getHealthDataAction } from '@/app/actions'
 import { motion } from 'framer-motion'
-import { Activity, Heart, Clock, ArrowRight, AlertCircle, User } from 'lucide-react'
+import { Activity, Heart, Clock, ArrowRight, AlertCircle, User, Moon, FileText } from 'lucide-react'
 
 const initialState = { error: '' }
 
 export default function HealthSetupPage() {
   const [state, formAction, isPending] = useActionState(saveHealthData, initialState)
+
+  const [userName, setUserName] = useState('')
+  const [isExisting, setIsExisting] = useState(false)
+  
+  const [fAge, setFAge] = useState('')
+  const [fRest, setFRest] = useState('')
+  const [fCondition, setFCondition] = useState('')
+  const [fSleep, setFSleep] = useState('')
+  const [fOther, setFOther] = useState('')
+
+  useEffect(() => {
+    getHealthDataAction().then(data => {
+      if (data) {
+        setUserName(data.name || '')
+        setIsExisting(data.isExisting || false)
+        if (data.isExisting) {
+          setFAge(data.age ? String(data.age) : '')
+          setFRest(data.preferredRestInterval ? String(data.preferredRestInterval) : '')
+          setFCondition(data.healthCondition || '')
+          setFSleep(data.sleepStatus || '')
+          setFOther(data.otherChallenges || '')
+        }
+      }
+    })
+  }, [])
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
@@ -33,9 +58,13 @@ export default function HealthSetupPage() {
             >
               <Heart className="w-10 h-10 text-purple-500" />
             </motion.div>
-            <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-3">Health & Comfort setup</h1>
+            <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-3">
+              {isExisting ? `${userName}'s Health Dashboard` : 'Health & Comfort setup'}
+            </h1>
             <p className="text-base text-foreground/60 max-w-md mx-auto">
-              Tell us about your health profile and comfort needs so we can recommend the perfect resting intervals for your long trips.
+              {isExisting 
+                ? 'Manage your personalized health profile, sleep patterns, and travel challenges.' 
+                : 'Tell us about your health profile and comfort needs so we can recommend the perfect resting intervals for your long trips.'}
             </p>
           </div>
 
@@ -62,7 +91,8 @@ export default function HealthSetupPage() {
                   required
                   min="16"
                   max="120"
-                  placeholder="e.g. 35"
+                  value={fAge}
+                  onChange={e => setFAge(e.target.value)}
                   className="w-full bg-background/50 border border-border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500 transition-all font-medium"
                 />
               </div>
@@ -79,20 +109,23 @@ export default function HealthSetupPage() {
                     min="30"
                     max="300"
                     placeholder="e.g. 120"
+                    value={fRest}
+                    onChange={e => setFRest(e.target.value)}
                     className="w-full bg-background/50 border border-border rounded-xl px-4 py-3 pr-20 outline-none focus:ring-2 focus:ring-pink-500 transition-all font-medium"
                   />
                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-foreground/40 font-semibold text-sm">minutes</span>
                 </div>
               </div>
 
-              <div className="space-y-2 md:col-span-2">
+              <div className="space-y-2">
                 <label className="text-sm font-semibold text-foreground/80 flex items-center gap-2">
-                  <Activity className="w-4 h-4 text-rose-500" /> Medical/Health Conditions
+                  <Activity className="w-4 h-4 text-rose-500" /> Medical Conditions
                 </label>
                 <select
                   name="healthCondition"
                   required
-                  defaultValue=""
+                  value={fCondition}
+                  onChange={e => setFCondition(e.target.value)}
                   className="w-full bg-background/50 border border-border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-rose-500 transition-all font-medium appearance-none"
                 >
                   <option value="" disabled>Select condition (if any)</option>
@@ -103,7 +136,40 @@ export default function HealthSetupPage() {
                   <option value="bladder">Frequent Bathroom Needs</option>
                   <option value="other">Other</option>
                 </select>
-                <p className="text-xs text-foreground/50 mt-1">This helps us plan optimal stretch/rest breaks for your wellness.</p>
+                <p className="text-xs text-foreground/50 mt-1">We'll map optimal stretch locations.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-foreground/80 flex items-center gap-2">
+                  <Moon className="w-4 h-4 text-indigo-500" /> Sleep Quality
+                </label>
+                <select
+                  name="sleepStatus"
+                  value={fSleep}
+                  onChange={e => setFSleep(e.target.value)}
+                  className="w-full bg-background/50 border border-border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium appearance-none"
+                >
+                  <option value="">Select sleep status...</option>
+                  <option value="well_rested">Well Rested (7+ hours)</option>
+                  <option value="moderate">Average (5-6 hours)</option>
+                  <option value="deprived">Sleep Deprived (&lt; 5 hours)</option>
+                  <option value="chronic">Chronic Fatigue</option>
+                </select>
+                <p className="text-xs text-foreground/50 mt-1">Alerts shift based on exhaustion risks.</p>
+              </div>
+
+              <div className="space-y-2 md:col-span-2">
+                <label className="text-sm font-semibold text-foreground/80 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-emerald-500" /> Other Challenges / Specifics (Optional)
+                </label>
+                <textarea
+                  name="otherChallenges"
+                  placeholder="e.g. Travel sickness, requires wheelchair ramps, low sugar emergencies..."
+                  value={fOther}
+                  onChange={e => setFOther(e.target.value)}
+                  rows={2}
+                  className="w-full bg-background/50 border border-border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-medium resize-none"
+                />
               </div>
             </div>
 
@@ -111,7 +177,7 @@ export default function HealthSetupPage() {
               disabled={isPending}
               className="w-full flex items-center justify-center gap-2 mt-8 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white rounded-xl py-4 font-semibold text-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed group shadow-lg shadow-purple-500/20"
             >
-              {isPending ? 'Saving Profile...' : 'Complete Setup'}
+              {isPending ? 'Saving Profile...' : (isExisting ? 'Update Health Profile' : 'Complete Setup')}
               {!isPending && <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />}
             </button>
           </form>

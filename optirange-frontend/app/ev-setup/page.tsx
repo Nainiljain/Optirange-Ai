@@ -1,7 +1,9 @@
 'use client'
 
 import { useActionState, useState, useEffect } from 'react'
-import { saveEvData } from '@/app/actions'
+import { saveEvData, getEvByIdAction } from '@/app/actions'
+import { useSearchParams } from 'next/navigation'
+import { Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Car, Zap, Battery, Activity, ArrowRight, AlertCircle, Settings2,
@@ -57,7 +59,7 @@ function useEVLookup() {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function EvSetupPage() {
+function EvSetupContent() {
   const [state, formAction, isPending] = useActionState(saveEvData, initialState)
 
   // CarAPI lookup state
@@ -70,8 +72,26 @@ export default function EvSetupPage() {
   // Form field values (controlled so CarAPI can auto-fill)
   const [fMake,     setFMake]     = useState('')
   const [fModel,    setFModel]    = useState('')
+  const [fNickname, setFNickname] = useState('')
   const [fBattery,  setFBattery]  = useState('')
   const [fRange,    setFRange]    = useState('')
+
+  const searchParams = useSearchParams()
+  const editId = searchParams.get('editId')
+
+  useEffect(() => {
+    if (editId) {
+      getEvByIdAction(editId).then(data => {
+        if (data) {
+          setFMake(data.make || '')
+          setFModel(data.model || '')
+          setFNickname(data.nickname || '')
+          setFBattery(data.batteryCapacity ? String(data.batteryCapacity) : '')
+          setFRange(data.rangeAtFull ? String(data.rangeAtFull) : '')
+        }
+      })
+    }
+  }, [editId])
 
   const handleLookupMakeChange = (make: string) => {
     setLookupMake(make)
@@ -241,6 +261,8 @@ export default function EvSetupPage() {
           </div>
 
           <form action={formAction} className="space-y-6">
+            <input type="hidden" name="editId" value={editId || ''} />
+
             {state?.error && (
               <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
                 className="flex items-center gap-2 p-4 bg-red-500/10 text-red-500 rounded-xl text-sm font-semibold">
@@ -266,6 +288,15 @@ export default function EvSetupPage() {
                 <input type="text" name="model" required placeholder="e.g. Model 3 Long Range"
                   value={fModel} onChange={e => setFModel(e.target.value)}
                   className="w-full bg-background/50 border border-border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-medium" />
+              </div>
+
+              <div className="space-y-2 md:col-span-2">
+                <label className="text-sm font-semibold text-foreground/80 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-purple-500" /> Nickname (Optional)
+                </label>
+                <input type="text" name="nickname" placeholder="e.g. Daily Driver or Road Trip SUV"
+                  value={fNickname} onChange={e => setFNickname(e.target.value)}
+                  className="w-full bg-background/50 border border-border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500 transition-all font-medium" />
               </div>
 
               <div className="space-y-2">
@@ -310,5 +341,13 @@ export default function EvSetupPage() {
         </div>
       </motion.div>
     </div>
+  )
+}
+
+export default function EvSetupPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>}>
+      <EvSetupContent />
+    </Suspense>
   )
 }

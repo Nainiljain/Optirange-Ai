@@ -7,11 +7,10 @@ import { EvData, HealthData } from "@/lib/models"
 import { logoutAction } from "@/app/actions"
 import TripPlannerClient from "./TripPlannerClient"
 
-export default async function TripPlanner({
-  searchParams,
-}: {
-  searchParams: { carId?: string }
+export default async function TripPlanner(props: {
+  searchParams: Promise<{ carId?: string }>
 }) {
+  const searchParams = await props.searchParams;
   const user = await getUser()
   if (!user) redirect('/login')
 

@@ -90,7 +90,7 @@ export async function registerAction(prevState: any, formData: FormData) {
 export async function logoutAction() {
   await clearUserSession()
   revalidatePath('/', 'layout')
-  redirect('/login')
+  redirect('/')
 }
 
 export async function saveEvData(prevState: any, formData: FormData) {
@@ -157,15 +157,6 @@ export async function deleteEvAction(evId: string) {
   return { success: true }
 }
 
-export async function getEvByIdAction(editId: string) {
-  const user = await getUser()
-  if (!user) return null
-  await connectDB()
-  const ev = await EvData.findOne({ _id: editId, userId: user.id }).lean() as any
-  if (!ev) return null
-  return { ...ev, _id: ev._id.toString(), userId: ev.userId.toString() }
-}
-
 export async function saveTripData(
   startLocation: string,
   endLocation: string,
@@ -206,8 +197,6 @@ export async function saveHealthData(prevState: any, formData: FormData) {
   const age = Number(formData.get('age'))
   const healthCondition = formData.get('healthCondition') as string
   const preferredRestInterval = Number(formData.get('preferredRestInterval'))
-  const sleepStatus = formData.get('sleepStatus') as string || ''
-  const otherChallenges = formData.get('otherChallenges') as string || ''
 
   if (!age || !healthCondition || !preferredRestInterval) {
     return { error: 'Please fill all fields properly' }
@@ -219,11 +208,11 @@ export async function saveHealthData(prevState: any, formData: FormData) {
   if (exists) {
     await HealthData.updateOne(
       { userId: user.id },
-      { age, healthCondition, preferredRestInterval, sleepStatus, otherChallenges }
+      { age, healthCondition, preferredRestInterval }
     )
   } else {
     await HealthData.create({
-      userId: user.id, age, healthCondition, preferredRestInterval, sleepStatus, otherChallenges
+      userId: user.id, age, healthCondition, preferredRestInterval
     })
   }
 
@@ -231,35 +220,69 @@ export async function saveHealthData(prevState: any, formData: FormData) {
   redirect('/dashboard')
 }
 
-export async function getHealthDataAction() {
-  const user = await getUser()
-  if (!user) return null
-  await connectDB()
-  const data = await HealthData.findOne({ userId: user.id }).lean() as any
-  if (!data) return { name: user.name, isExisting: false }
-  return { ...data, _id: data._id.toString(), userId: data.userId.toString(), name: user.name, isExisting: true }
+// ── Google Polyline decoder ─────────────────────────────────────────────────
+function decodePolyline(encoded: string): Array<{ lat: number; lon: number }> {
+  const points: Array<{ lat: number; lon: number }> = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b: number, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ lat: lat / 1e5, lon: lng / 1e5 });
+  }
+  return points;
+}
+
+// ── Sample N evenly-spaced points from a polyline ──────────────────────────
+function samplePolyline(
+  points: Array<{ lat: number; lon: number }>,
+  numSamples: number
+): Array<{ lat: number; lon: number }> {
+  if (points.length === 0 || numSamples === 0) return [];
+  if (numSamples >= points.length) return points;
+  const result: Array<{ lat: number; lon: number }> = [];
+  for (let i = 1; i <= numSamples; i++) {
+    const idx = Math.round((i / (numSamples + 1)) * (points.length - 1));
+    result.push(points[idx]);
+  }
+  return result;
 }
 
 export async function calculateTripData(
-  startLat: number, startLon: number, 
+  startLat: number, startLon: number,
   destLat: number, destLon: number
 ) {
   const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
-  // ── Primary: Google Maps Distance Matrix API (real driving distance + duration) ──
+  // ── Primary: Google Maps Directions API — gives real distance + route polyline ──
   if (GOOGLE_API_KEY && !GOOGLE_API_KEY.startsWith('YOUR_')) {
     try {
-      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${startLat},${startLon}&destinations=${destLat},${destLon}&key=${GOOGLE_API_KEY}`;
-      const res = await fetch(url);
+      const url =
+        `https://maps.googleapis.com/maps/api/directions/json` +
+        `?origin=${startLat},${startLon}` +
+        `&destination=${destLat},${destLon}` +
+        `&key=${GOOGLE_API_KEY}`;
+
+      const res  = await fetch(url);
       const data = await res.json();
-      const elem = data?.rows?.[0]?.elements?.[0];
-      if (elem?.status === 'OK') {
-        const drivingDistance = Math.round(elem.distance.value / 1609.34); // metres → miles
-        const durationMinutes = Math.round(elem.duration.value / 60);
-        return { drivingDistance, durationMinutes, source: 'google_maps' };
+      const route = data?.routes?.[0];
+      const leg   = route?.legs?.[0];
+
+      if (leg?.distance && leg?.duration) {
+        const drivingDistance = Math.round(leg.distance.value / 1609.34); // metres → miles
+        const durationMinutes = Math.round(leg.duration.value / 60);
+
+        // Decode the overview polyline to get actual road points
+        const encoded  = route.overview_polyline?.points || '';
+        const polyline = encoded ? decodePolyline(encoded) : [];
+
+        return { drivingDistance, durationMinutes, source: 'google_maps', polyline };
       }
     } catch (e) {
-      console.error('[calculateTripData] Google Maps API error, falling back to Haversine:', e);
+      console.error('[calculateTripData] Directions API error, falling back to Haversine:', e);
     }
   }
 
@@ -276,7 +299,35 @@ export async function calculateTripData(
   let drivingDistance = Math.round(crowFliesDistance * 1.25);
   if (drivingDistance < 1) drivingDistance = 1;
   const durationMinutes = Math.round((drivingDistance / 55) * 60);
-  return { drivingDistance, durationMinutes, source: 'haversine' };
+  return { drivingDistance, durationMinutes, source: 'haversine', polyline: [] as Array<{ lat: number; lon: number }> };
+}
+
+// ── Public helper: pick N charging-stop search centres from a route polyline ─
+// Called from TripPlannerClient — takes the decoded polyline and samples
+// evenly-spaced real road points to use as NRCan query centres.
+export async function getRouteWaypoints(
+  polyline: Array<{ lat: number; lon: number }>,
+  startLat: number, startLon: number,
+  destLat: number, destLon: number,
+  numStops: number
+): Promise<Array<{ lat: number; lon: number }>> {
+  if (numStops === 0) return [];
+
+  // If we have a real polyline, sample it; otherwise fall back to linear interpolation
+  if (polyline && polyline.length > 2) {
+    return samplePolyline(polyline, numStops);
+  }
+
+  // Linear interpolation fallback (no Google key / no polyline)
+  const waypoints: Array<{ lat: number; lon: number }> = [];
+  for (let i = 1; i <= numStops; i++) {
+    const fraction = i / (numStops + 1);
+    waypoints.push({
+      lat: startLat + (destLat - startLat) * fraction,
+      lon: startLon + (destLon - startLon) * fraction,
+    });
+  }
+  return waypoints;
 }
 
 // ========================================================
@@ -422,96 +473,246 @@ export async function runMLPredictionDirect(
 // ========================================================
 
 export async function fetchNRCanStationsAction(
-  waypoints: Array<{ lat: number; lon: number }>
+  waypoints: Array<{ lat: number; lon: number }>,
+  routeStart?: { lat: number; lon: number },
+  routeDest?:  { lat: number; lon: number }
 ): Promise<ChargingStation[][]> {
   const results: ChargingStation[][] = [];
+  // Track station IDs used across ALL stops — prevents same station appearing twice
+  const usedIds = new Set<string>();
 
-  for (const wp of waypoints) {
-    const stationsAtWaypoint: ChargingStation[] = [];
+  // ── Route bounding box ──────────────────────────────────────────────────
+  // Stations outside this box are rejected — prevents e.g. LA stations
+  // appearing on a Toronto→Montreal route. Padding = 2° (~220 km) each side.
+  const PADDING = 2.0;
+  const boxMinLat = routeStart && routeDest ? Math.min(routeStart.lat, routeDest.lat) - PADDING : -90;
+  const boxMaxLat = routeStart && routeDest ? Math.max(routeStart.lat, routeDest.lat) + PADDING :  90;
+  const boxMinLon = routeStart && routeDest ? Math.min(routeStart.lon, routeDest.lon) - PADDING : -180;
+  const boxMaxLon = routeStart && routeDest ? Math.max(routeStart.lon, routeDest.lon) + PADDING :  180;
 
-    // ── Primary: NRCan EVCS (Canadian stations) ──────────────────────────────
+  const inBoundingBox = (lat: number, lon: number) =>
+    lat >= boxMinLat && lat <= boxMaxLat &&
+    lon >= boxMinLon && lon <= boxMaxLon;
+
+  for (let i = 0; i < waypoints.length; i++) {
+    const wp = waypoints[i];
+    let candidates: ChargingStation[] = [];
+
+    // ── Primary: NREL AFDC (US + Canada, larger dataset, better dedup support) ──
     try {
-      const nrcanUrl =
-        `${process.env.NRCAN_EVCS_URL || 'https://chargepoints.ped.nrcan.gc.ca/api/crs/fmt/json'}` +
-        `?lang=en&lat=${wp.lat}&lng=${wp.lon}&dist=25`;
+      const nrelKey = process.env.NREL_API_KEY || 'DEMO_KEY';
+      // Fetch 15 candidates so we have enough to skip already-used stations
+      const nrelUrl =
+        `https://developer.nrel.gov/api/alt-fuel-stations/v1.json` +
+        `?api_key=${nrelKey}&fuel_type=ELEC` +
+        `&latitude=${wp.lat}&longitude=${wp.lon}` +
+        `&radius=50&limit=15&status=E`;
 
-      const nrcanRes = await fetch(nrcanUrl, { next: { revalidate: 3600 } });
+      const nrelRes = await fetch(nrelUrl, { cache: 'no-store' });
 
-      if (nrcanRes.ok) {
-        const nrcanData = await nrcanRes.json();
-        const rawStations: any[] = nrcanData?.fuel_stations || [];
-
-        // Prefer DCFC stations, sort by distance, take top 3
-        const sorted = rawStations
-          .filter((s: any) => s.latitude && s.longitude)
+      if (nrelRes.ok) {
+        const nrelData = await nrelRes.json();
+        const raw: any[] = nrelData?.fuel_stations || [];
+        candidates = raw
           .map((s: any) => ({
-            id: `nrcan-${s.id || s.hy_objectid}`,
-            name: s.station_name || s.name || 'Charging Station',
-            address: s.street_address || s.address || '',
-            city: s.city || '',
-            province: s.state || s.province || '',
-            lat: parseFloat(s.latitude),
-            lon: parseFloat(s.longitude),
-            level2Ports: parseInt(s.ev_level2_evse_num) || 0,
-            dcFastPorts: parseInt(s.ev_dc_fast_num) || 0,
-            network: s.ev_network || s.owner_type_code || 'Unknown',
-            distanceKm: s.distance ? parseFloat(s.distance) : undefined,
+            id:          `nrel-${s.id}`,
+            name:        s.station_name || 'Charging Station',
+            address:     s.street_address || '',
+            city:        s.city || '',
+            province:    s.state || '',
+            lat:         s.latitude,
+            lon:         s.longitude,
+            level2Ports: s.ev_level2_evse_num || 0,
+            dcFastPorts: s.ev_dc_fast_num || 0,
+            network:     s.ev_network || 'Unknown',
           }))
-          .sort((a: any, b: any) => {
-            const aHasDC = a.dcFastPorts > 0;
-            const bHasDC = b.dcFastPorts > 0;
-            if (aHasDC && !bHasDC) return -1;
-            if (!aHasDC && bHasDC) return 1;
-            const distA = a.distanceKm || 999;
-            const distB = b.distanceKm || 999;
-            return distA - distB;
-          });
-
-        stationsAtWaypoint.push(...sorted.slice(0, 3));
+          // Prefer DCFC stations first, then by number of ports
+          .filter((s: ChargingStation) => inBoundingBox(s.lat, s.lon))
+          .sort((a: ChargingStation, b: ChargingStation) =>
+            b.dcFastPorts - a.dcFastPorts || b.level2Ports - a.level2Ports
+          );
       }
     } catch (e) {
-      console.error('[NRCan] Fetch error:', e);
+      console.error(`[NREL] Stop ${i + 1} error:`, e);
     }
 
-    // ── Fallback: NREL AFDC (US + Canada) ────────────────────────────────────
-    if (stationsAtWaypoint.length === 0) {
+    // ── Fallback: NRCan (Canada-only) if NREL returned nothing ───────────────
+    if (candidates.length === 0) {
       try {
-        const nrelKey = process.env.NREL_API_KEY || 'DEMO_KEY';
-        const nrelUrl =
-          `https://developer.nrel.gov/api/alt-fuel-stations/v1.json` +
-          `?api_key=${nrelKey}&fuel_type=ELEC&latitude=${wp.lat}&longitude=${wp.lon}` +
-          `&radius=15&limit=3&ev_level=dc_fast&status=E`;
-
-        const nrelRes = await fetch(nrelUrl, { next: { revalidate: 3600 } });
-
-        if (nrelRes.ok) {
-          const nrelData = await nrelRes.json();
-          const raw: any[] = nrelData?.fuel_stations || [];
-
-          stationsAtWaypoint.push(
-            ...raw.map((s: any) => ({
-              id: `nrel-${s.id}`,
-              name: s.station_name || 'Charging Station',
-              address: s.street_address || '',
-              city: s.city || '',
-              province: s.state || '',
-              lat: s.latitude,
-              lon: s.longitude,
-              level2Ports: s.ev_level2_evse_num || 0,
-              dcFastPorts: s.ev_dc_fast_num || 0,
-              network: s.ev_network || 'Unknown',
+        const nrcanUrl =
+          `${process.env.NRCAN_EVCS_URL || 'https://chargepoints.ped.nrcan.gc.ca/api/crs/fmt/json'}` +
+          `?lang=en&lat=${wp.lat}&lng=${wp.lon}&dist=50`;
+        const nrcanRes = await fetch(nrcanUrl, { cache: 'no-store' });
+        if (nrcanRes.ok) {
+          const nrcanData = await nrcanRes.json();
+          const raw: any[] = nrcanData?.fuel_stations || [];
+          candidates = raw
+            .filter((s: any) => s.latitude && s.longitude)
+            .filter((s: any) => inBoundingBox(parseFloat(s.latitude), parseFloat(s.longitude)))
+            .map((s: any) => ({
+              id:          `nrcan-${s.id || s.hy_objectid}`,
+              name:        s.station_name || s.name || 'Charging Station',
+              address:     s.street_address || s.address || '',
+              city:        s.city || '',
+              province:    s.state || s.province || '',
+              lat:         parseFloat(s.latitude),
+              lon:         parseFloat(s.longitude),
+              level2Ports: parseInt(s.ev_level2_evse_num) || 0,
+              dcFastPorts: parseInt(s.ev_dc_fast_num) || 0,
+              network:     s.ev_network || s.owner_type_code || 'Unknown',
             }))
-          );
+            .sort((a: ChargingStation, b: ChargingStation) =>
+              b.dcFastPorts - a.dcFastPorts
+            );
         }
       } catch (e) {
-        console.error('[NREL] Fetch error:', e);
+        console.error(`[NRCan] Stop ${i + 1} error:`, e);
       }
     }
 
-    results.push(stationsAtWaypoint);
+    // ── Deduplicate: skip stations already assigned to a previous stop ────────
+    const unique = candidates.filter(s => !usedIds.has(s.id));
+
+    // Pick best 3 unique stations for this stop
+    const chosen = unique.slice(0, 3);
+
+    // If no unique stations found at all, allow reuse as absolute last resort
+    if (chosen.length === 0 && candidates.length > 0) {
+      chosen.push(candidates[0]);
+    }
+
+    // Mark the top pick as used so subsequent stops won't repeat it
+    if (chosen.length > 0) {
+      usedIds.add(chosen[0].id);
+    }
+
+    results.push(chosen);
   }
 
   return results;
 }
 
 // interpolateWaypoints moved to @/lib/tripUtils — import from there
+
+
+// ========================================================
+// SAVED LOCATIONS — Home, Work, Favourites
+// ========================================================
+
+export async function getSavedLocationsAction() {
+  const user = await getUser()
+  if (!user) return []
+  await connectDB()
+  const { SavedLocation } = await import('@/lib/models')
+  const locs = await SavedLocation.find({ userId: user.id }).sort({ createdAt: 1 }).lean() as any[]
+  return locs.map((l: any) => ({
+    id:      l._id.toString(),
+    label:   l.label,
+    type:    l.type,
+    address: l.address,
+    lat:     l.lat,
+    lon:     l.lon,
+  }))
+}
+
+export async function saveFavouriteAction(
+  label: string,
+  type: 'home' | 'work' | 'favourite',
+  address: string,
+  lat: number,
+  lon: number
+) {
+  const user = await getUser()
+  if (!user) return { error: 'Unauthorized' }
+  await connectDB()
+  const { SavedLocation } = await import('@/lib/models')
+  // Home and Work are singletons — upsert; Favourites always create new
+  if (type === 'home' || type === 'work') {
+    await SavedLocation.findOneAndUpdate(
+      { userId: user.id, type },
+      { label, address, lat, lon },
+      { upsert: true }
+    )
+  } else {
+    await SavedLocation.create({ userId: user.id, label, type, address, lat, lon })
+  }
+  revalidatePath('/trip-planner')
+  return { success: true }
+}
+
+export async function deleteFavouriteAction(id: string) {
+  const user = await getUser()
+  if (!user) return { error: 'Unauthorized' }
+  await connectDB()
+  const { SavedLocation } = await import('@/lib/models')
+  await SavedLocation.deleteOne({ _id: id, userId: user.id })
+  revalidatePath('/trip-planner')
+  return { success: true }
+}
+
+// ========================================================
+// RECENT SEARCHES
+// ========================================================
+
+export async function saveRecentSearchAction(address: string, lat: number, lon: number) {
+  const user = await getUser()
+  if (!user) return
+  await connectDB()
+  const { RecentSearch } = await import('@/lib/models')
+  // Remove duplicate if same address already saved
+  await RecentSearch.deleteOne({ userId: user.id, address })
+  await RecentSearch.create({ userId: user.id, address, lat, lon })
+  // Keep only last 8 recent searches per user
+  const all = await RecentSearch.find({ userId: user.id }).sort({ usedAt: -1 }).lean()
+  if (all.length > 8) {
+    const toDelete = all.slice(8).map((r: any) => r._id)
+    await RecentSearch.deleteMany({ _id: { $in: toDelete } })
+  }
+}
+
+export async function getRecentSearchesAction() {
+  const user = await getUser()
+  if (!user) return []
+  await connectDB()
+  const { RecentSearch } = await import('@/lib/models')
+  const searches = await RecentSearch.find({ userId: user.id }).sort({ usedAt: -1 }).limit(8).lean() as any[]
+  return searches.map((s: any) => ({
+    address: s.address,
+    lat:     s.lat,
+    lon:     s.lon,
+  }))
+}
+
+
+// ── Get single EV by ID (used by ev-setup edit mode) ─────────────────────────
+export async function getEvByIdAction(evId: string) {
+  const user = await getUser()
+  if (!user) return null
+  await connectDB()
+  const ev = await EvData.findOne({ _id: evId, userId: user.id }).lean() as any
+  if (!ev) return null
+  return {
+    id:              ev._id.toString(),
+    make:            ev.make            || '',
+    model:           ev.model           || '',
+    nickname:        ev.nickname        || '',
+    batteryCapacity: ev.batteryCapacity || 0,
+    rangeAtFull:     ev.rangeAtFull     || 0,
+    carPic:          ev.carPic          || null,
+  }
+}
+
+
+// ── Get current user's health data (used by health-setup edit mode) ───────────
+export async function getHealthDataAction() {
+  const user = await getUser()
+  if (!user) return null
+  await connectDB()
+  const h = await HealthData.findOne({ userId: user.id }).lean() as any
+  if (!h) return null
+  return {
+    age:                   h.age                   ?? '',
+    healthCondition:       h.healthCondition       ?? 'none',
+    preferredRestInterval: h.preferredRestInterval ?? 120,
+  }
+}

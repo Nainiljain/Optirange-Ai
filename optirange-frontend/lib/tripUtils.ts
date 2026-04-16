@@ -38,6 +38,8 @@ export interface RouteResult {
   mlStatus?: string;
   mlHealthAdvice?: string;
   mlEffectiveRange?: number;
+  arrivalTime?: string;
+  departureTime?: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

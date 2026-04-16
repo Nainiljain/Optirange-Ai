@@ -1,16 +1,22 @@
-import Link from "next/link"
 import { redirect } from "next/navigation"
-import { Zap, Map, MapPin, Activity, Settings2, LogOut } from "lucide-react"
+import { MapPin } from "lucide-react"
 import { getUser } from "@/lib/auth"
 import { connectDB } from "@/lib/db"
 import { EvData, HealthData } from "@/lib/models"
-import { logoutAction, getSavedLocationsAction, getRecentSearchesAction } from "@/app/actions"
+import { getSavedLocationsAction, getRecentSearchesAction } from "@/app/actions"
+import AppSidebar from "@/app/components/AppSidebar"
 import TripPlannerClient from "./TripPlannerClient"
 
+/**
+ * Trip Planner server page.
+ *
+ * Next.js 16 change: `searchParams` is a Promise and must be awaited
+ * before accessing its properties.
+ */
 export default async function TripPlanner({
   searchParams,
 }: {
-  searchParams: { carId?: string }
+  searchParams: Promise<{ carId?: string }>
 }) {
   const user = await getUser()
   if (!user) redirect('/login')
@@ -24,8 +30,11 @@ export default async function TripPlanner({
   const healthData = await HealthData.findOne({ userId: user.id }).lean() as any
   if (!healthData) redirect('/health-setup')
 
+  // Await searchParams (Next.js 16 async API)
+  const resolvedParams = await searchParams
+
   // Determine initially selected car: ?carId param → matching car → else last added
-  const requestedId = searchParams?.carId
+  const requestedId = resolvedParams?.carId
   const initialCar  = requestedId
     ? (allCars.find((c: any) => c._id.toString() === requestedId) ?? allCars[allCars.length - 1])
     : allCars[allCars.length - 1]
@@ -42,53 +51,18 @@ export default async function TripPlanner({
 
   return (
     <div className="flex min-h-screen bg-background text-foreground font-sans selection:bg-blue-500/30">
-      {/* Sidebar */}
-      <aside className="hidden md:flex w-64 flex-col border-r border-border bg-card/50 backdrop-blur-xl p-6 z-20">
-        <Link href="/" className="flex items-center gap-2 mb-12 hover:opacity-80 transition-opacity">
-          <Zap className="h-6 w-6 text-blue-500" />
-          <span className="text-xl font-bold tracking-tight">OptiRange</span>
-        </Link>
-        <nav className="flex-1 space-y-2">
-          <Link href="/dashboard" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-foreground/60 hover:text-foreground hover:bg-foreground/5 transition-colors">
-            <Activity className="h-5 w-5" /> Overview
-          </Link>
-          <Link href="/trip-planner" className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-blue-500/10 text-blue-500 font-medium border border-blue-500/20 shadow-inner">
-            <Map className="h-5 w-5" /> Trip Planner
-          </Link>
-          <Link href="/ev-setup" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-foreground/60 hover:text-foreground hover:bg-foreground/5 transition-colors">
-            <Settings2 className="h-5 w-5" /> Add Vehicle
-          </Link>
-          <Link href="/health-setup" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-foreground/60 hover:text-foreground hover:bg-foreground/5 transition-colors">
-            <Activity className="h-5 w-5" /> Health Profile
-          </Link>
-        </nav>
-        <div className="mt-auto">
-          <form action={logoutAction} className="mt-4">
-            <button className="flex w-full items-center gap-3 px-3 py-2.5 rounded-xl text-red-500 hover:bg-red-500/10 transition-colors">
-              <LogOut className="h-5 w-5" /> Sign Out
-            </button>
-          </form>
-          <div className="flex items-center gap-3 p-3 mt-4 rounded-xl bg-secondary border border-border">
-            {user.profilePic ? (
-              <img src={user.profilePic} alt={user.name} className="w-10 h-10 rounded-full object-cover shrink-0 border border-border" />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
-                <span className="font-semibold text-blue-500">{user.name.charAt(0)}</span>
-              </div>
-            )}
-            <div className="overflow-hidden">
-              <p className="text-sm font-medium truncate">{user.name}</p>
-              <p className="text-xs text-foreground/50 truncate">{user.email}</p>
-            </div>
-          </div>
-        </div>
-      </aside>
+      {/* ── Sidebar ── */}
+      <AppSidebar
+        activePage="trip-planner"
+        user={{ name: user.name, email: user.email, profilePic: user.profilePic ?? null }}
+      />
 
-      {/* Main */}
-      <main className="flex-1 p-4 md:p-8 overflow-y-auto relative">
-        <div className="absolute top-[-100px] left-[-100%] w-[1000px] h-[1000px] bg-purple-500/10 blur-[150px] rounded-full pointer-events-none" />
+      {/* ── Main ── */}
+      <main className="flex-1 p-4 md:p-8 overflow-y-auto relative" id="main-content">
+        <div className="absolute top-[-100px] left-[-100%] w-[1000px] h-[1000px] bg-purple-500/10 blur-[150px] rounded-full pointer-events-none" aria-hidden="true" />
+
         <header className="mb-8 md:mb-10 flex items-center gap-4 relative z-10">
-          <div className="p-4 bg-purple-500/10 rounded-2xl border border-purple-500/20 shadow-lg">
+          <div className="p-4 bg-purple-500/10 rounded-2xl border border-purple-500/20 shadow-lg" aria-hidden="true">
             <MapPin className="h-8 w-8 text-purple-500" />
           </div>
           <div>
@@ -100,6 +74,7 @@ export default async function TripPlanner({
             </p>
           </div>
         </header>
+
         <div className="relative z-10">
           <TripPlannerClient
             user={serialisedUser}

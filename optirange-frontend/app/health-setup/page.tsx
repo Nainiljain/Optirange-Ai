@@ -4,6 +4,7 @@ import { useActionState, useState, useEffect } from 'react'
 import { saveHealthData, getHealthDataAction } from '@/app/actions'
 import { motion } from 'framer-motion'
 import { Activity, Heart, Clock, ArrowRight, AlertCircle, User, Loader2 } from 'lucide-react'
+import OnboardingStepper from '@/app/components/OnboardingStepper'
 
 const initialState = { error: '' }
 
@@ -46,6 +47,8 @@ export default function HealthSetupPage() {
         transition={{ duration: 0.6 }}
         className="w-full max-w-2xl z-10"
       >
+        <OnboardingStepper currentStep={3} />
+
         <div className="glass-panel p-8 md:p-12 rounded-3xl shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-400 via-pink-500 to-rose-500" />
 

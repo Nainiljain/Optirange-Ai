@@ -1,15 +1,21 @@
 'use client'
 
-import { useActionState, useEffect } from 'react'
+import { useActionState, useState } from 'react'
 import { loginAction } from '@/app/actions'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import Link from 'next/link'
-import { BatteryCharging, Mail, Lock, AlertCircle, ArrowRight } from 'lucide-react'
+import { BatteryCharging, Mail, Lock, AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react'
 
 const initialState = { error: '' }
 
+/** Shake x-keyframes for error banner */
+const shakeX = [0, -12, 10, -8, 6, -4, 2, 0]
+
 export default function LoginPage() {
   const [state, formAction, isPending] = useActionState(loginAction, initialState)
+
+  // ── Password visibility toggle ──────────────────────────────────────
+  const [showPassword, setShowPassword] = useState(false)
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
@@ -40,18 +46,25 @@ export default function LoginPage() {
           </div>
 
           <form action={formAction} className="space-y-6">
-            {state?.error && (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="flex items-center gap-2 p-3 bg-red-500/10 text-red-500 rounded-xl text-sm"
-              >
-                <AlertCircle className="w-4 h-4" />
-                <span>{state.error}</span>
-              </motion.div>
-            )}
+            {/* ── Error banner with shake animation ──────────────── */}
+            <AnimatePresence mode="wait">
+              {state?.error && (
+                <motion.div
+                  key={state.error}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1, x: shakeX }}
+                  transition={{ duration: 0.5, ease: 'easeInOut' }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  className="flex items-center gap-2 p-3 bg-red-500/10 text-red-500 rounded-xl text-sm"
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{state.error}</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <div className="space-y-4">
+              {/* ── Email ───────────────────────────────────────── */}
               <div className="relative">
                 <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-foreground/40" />
                 <input
@@ -63,15 +76,24 @@ export default function LoginPage() {
                 />
               </div>
 
+              {/* ── Password with show/hide toggle ──────────────── */}
               <div className="relative">
                 <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-foreground/40" />
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   name="password"
                   required
                   placeholder="Password"
-                  className="w-full bg-background/50 border border-border rounded-xl px-12 py-4 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  className="w-full bg-background/50 border border-border rounded-xl px-12 py-4 outline-none focus:ring-2 focus:ring-blue-500 transition-all pr-12"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-foreground/40 hover:text-foreground/70 transition-colors"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
               </div>
             </div>
 

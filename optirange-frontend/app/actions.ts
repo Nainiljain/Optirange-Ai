@@ -68,6 +68,13 @@ export async function registerAction(prevState: any, formData: FormData) {
   if (existingUser) return { error: 'Email already registered' }
 
   const profilePicFile = formData.get('profilePic') as File | null
+
+  // Server-side guard: reject images larger than 2 MB
+  const MAX_PROFILE_PIC_SIZE = 2 * 1024 * 1024 // 2 MB
+  if (profilePicFile && typeof profilePicFile !== 'string' && profilePicFile.size > MAX_PROFILE_PIC_SIZE) {
+    return { error: 'Profile picture must be under 2 MB' }
+  }
+
   const profilePicUrl = await fileToBase64(profilePicFile)
 
   const hash = await bcrypt.hash(password, 10)

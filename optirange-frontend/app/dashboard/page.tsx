@@ -58,7 +58,7 @@ export default async function Dashboard() {
       {/* ── Sidebar ── */}
       <AppSidebar
         activePage="dashboard"
-        user={{ name: user.name, email: user.email, profilePic: user.profilePic ?? null }}
+        user={{ firstName: user.firstName, lastName: user.lastName, email: user.email, profilePic: user.profilePic ?? null }}
       />
 
       {/* ── Main ── */}
@@ -80,7 +80,7 @@ export default async function Dashboard() {
               />
             )}
             <div>
-              <h1 className="text-3xl font-bold mb-1">Welcome back, {user.name.split(' ')[0]}</h1>
+              <h1 className="text-3xl font-bold mb-1">Welcome back, {user.firstName}</h1>
               <p className="text-foreground/60 flex items-center gap-2 mt-1">
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
                   <Battery className="w-3 h-3" aria-hidden="true" /> {allCars.length} vehicle{allCars.length > 1 ? 's' : ''} registered

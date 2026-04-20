@@ -8,6 +8,7 @@ import {
   Car, Battery, Activity, ArrowRight, AlertCircle, Settings2,
   ChevronDown, Loader2, CheckCircle2, Sparkles,
 } from 'lucide-react'
+import OnboardingStepper from '@/app/components/OnboardingStepper'
 
 const initialState = { error: '' }
 
@@ -126,6 +127,21 @@ function EvSetupForm() {
 
       <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}
         className="w-full max-w-2xl z-10 space-y-6">
+
+        {/* ── Onboarding stepper (hidden during edit) ── */}
+        {!editId && <OnboardingStepper currentStep={2} />}
+
+        {/* ── First-time welcome message ── */}
+        {!editId && (
+          <motion.p
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="text-center text-sm text-foreground/50 -mb-2"
+          >
+            Step 2: Let&apos;s add your first EV! 🚗
+          </motion.p>
+        )}
 
         {/* ── CarAPI Auto-Lookup Panel ── */}
         <div className="glass-panel p-6 rounded-3xl shadow-xl relative overflow-hidden">

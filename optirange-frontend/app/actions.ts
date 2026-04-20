@@ -54,12 +54,13 @@ export async function loginAction(prevState: any, formData: FormData) {
 }
 
 export async function registerAction(prevState: any, formData: FormData) {
-  const name = formData.get('name') as string
+  const firstName = formData.get('firstName') as string
+  const lastName  = formData.get('lastName') as string
   const email = formData.get('email') as string
   const password = formData.get('password') as string
   const confirm = formData.get('confirm') as string
 
-  if (!name || !email || !password) return { error: 'Please fill all fields' }
+  if (!firstName || !lastName || !email || !password) return { error: 'Please fill all fields' }
   if (password !== confirm) return { error: 'Passwords do not match' }
   if (password.length < 6) return { error: 'Password must be at least 6 characters' }
 
@@ -68,12 +69,20 @@ export async function registerAction(prevState: any, formData: FormData) {
   if (existingUser) return { error: 'Email already registered' }
 
   const profilePicFile = formData.get('profilePic') as File | null
+
+  // Server-side guard: reject images larger than 2 MB
+  const MAX_PROFILE_PIC_SIZE = 2 * 1024 * 1024 // 2 MB
+  if (profilePicFile && typeof profilePicFile !== 'string' && profilePicFile.size > MAX_PROFILE_PIC_SIZE) {
+    return { error: 'Profile picture must be under 2 MB' }
+  }
+
   const profilePicUrl = await fileToBase64(profilePicFile)
 
   const hash = await bcrypt.hash(password, 10)
   
   const newUser = await User.create({
-    name,
+    firstName,
+    lastName,
     email,
     password: hash,
     profilePic: profilePicUrl
@@ -91,6 +100,81 @@ export async function logoutAction() {
   await clearUserSession()
   revalidatePath('/', 'layout')
   redirect('/')
+}
+
+// ── Get current user profile (used by profile settings page) ──────────────
+export async function getUserProfileAction() {
+  const user = await getUser()
+  if (!user) return null
+  await connectDB()
+  const full = await User.findById(user.id).select('firstName lastName name email profilePic').lean() as any
+  if (!full) return null
+  
+  let firstName = full.firstName;
+  let lastName = full.lastName;
+  if (!firstName && !lastName && full.name) {
+    const parts = full.name.split(' ');
+    firstName = parts[0] || '';
+    lastName = parts.slice(1).join(' ') || '';
+  }
+
+  return {
+    firstName:  firstName ?? '',
+    lastName:   lastName ?? '',
+    email:      full.email      ?? '',
+    profilePic: full.profilePic ?? null,
+  }
+}
+
+export async function updateProfileAction(prevState: any, formData: FormData) {
+  const user = await getUser()
+  if (!user) return { error: 'Unauthorized' }
+
+  const firstName = formData.get('firstName') as string
+  const lastName  = formData.get('lastName') as string
+  const email    = formData.get('email') as string
+  const password = formData.get('password') as string | null
+  const confirm  = formData.get('confirm') as string | null
+
+  if (!firstName || !lastName || !email) return { error: 'Name and email are required' }
+
+  await connectDB()
+
+  // If the email changed, make sure it isn't already taken by another user
+  if (email !== user.email) {
+    const duplicate = await User.findOne({ email, _id: { $ne: user.id } }).lean()
+    if (duplicate) return { error: 'Email is already in use by another account' }
+  }
+
+  // Build the update payload
+  const updateData: Record<string, any> = { firstName, lastName, email }
+
+  // Profile picture — respect existing 2 MB guard
+  const profilePicFile = formData.get('profilePic') as File | null
+  const MAX_PROFILE_PIC_SIZE = 2 * 1024 * 1024 // 2 MB
+  if (profilePicFile && typeof profilePicFile !== 'string' && profilePicFile.size > MAX_PROFILE_PIC_SIZE) {
+    return { error: 'Profile picture must be under 2 MB' }
+  }
+  const profilePicUrl = await fileToBase64(profilePicFile)
+  if (profilePicUrl) {
+    updateData.profilePic = profilePicUrl
+  }
+
+  // Password — only update if a new one was provided
+  if (password && password.trim().length > 0) {
+    if (password !== confirm) return { error: 'New passwords do not match' }
+    if (password.length < 6) return { error: 'Password must be at least 6 characters' }
+    updateData.password = await bcrypt.hash(password, 10)
+  }
+
+  await User.findByIdAndUpdate(user.id, { $set: updateData }, { new: true, runValidators: true })
+
+  // Revalidate all routes that display user info (sidebar, header, etc.)
+  revalidatePath('/dashboard')
+  revalidatePath('/profile')
+  revalidatePath('/', 'layout')
+
+  return { success: true, message: 'Profile updated successfully' }
 }
 
 export async function saveEvData(prevState: any, formData: FormData) {

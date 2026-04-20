@@ -258,11 +258,116 @@ function samplePolyline(
   return result;
 }
 
+// ========================================================
+// ML PREDICTION ENGINE — translated from Python prediction.py
+// ========================================================
+
+function calculateRange(battery: number, efficiency: number = 5) {
+  return battery * efficiency;
+}
+
+function calculateStops(distance: number, rangeKm: number) {
+  if (rangeKm === 0) return 0;
+  return Math.max(0, Math.ceil(distance / rangeKm) - 1);
+}
+
+function healthCheck(fatigue: string, sleep: number) {
+  if (sleep < 5) return '⚠️ Low sleep. Take frequent breaks.';
+  if (fatigue === 'high') return '🚨 High fatigue. Avoid long driving.';
+  return '✅ You are fit to drive.';
+}
+
+function predictML(data: { battery: number; distance: number; fatigue: string; sleep: number; driverMultiplier?: number }) {
+  let rangeKm = calculateRange(data.battery);
+  if (data.driverMultiplier) {
+    rangeKm *= data.driverMultiplier;
+  }
+  const result: any = {};
+  if (rangeKm >= data.distance) {
+    result.status = 'Reachable'; result.charging_required = false; result.stops = 0;
+  } else {
+    result.status = 'Charging Needed'; result.charging_required = true;
+    result.stops = calculateStops(data.distance, rangeKm);
+  }
+  result.estimated_range = rangeKm;
+  result.health_advice = healthCheck(data.fatigue, data.sleep);
+  return result;
+}
+
+export async function runMLPredictionDirect(
+  batteryCapacityKwh: number,
+  distanceMiles: number,
+  weatherPenalty: number,
+  healthData: { healthCondition?: string; preferredRestInterval?: number } | null
+): Promise<{
+  status: string; charging_required: boolean; stops: number;
+  estimated_range_miles: number; health_advice: string; effective_range_miles: number;
+}> {
+  const user = await getUser();
+  let driverMultiplier = 1.0;
+  if (user) {
+    const { calculateDriverEfficiency } = await import('@/lib/analysis');
+    driverMultiplier = await calculateDriverEfficiency(user.id);
+  }
+
+  const baseRangeKm    = calculateRange(batteryCapacityKwh);
+  const rangeKm        = baseRangeKm * driverMultiplier;
+  const distanceKm     = distanceMiles * 1.60934;
+  const effectiveRangeKm = rangeKm * (1 - weatherPenalty);
+
+  const condition = healthData?.healthCondition || 'none';
+  const fatigueLookup: Record<string, string> = {
+    chronic_fatigue: 'high', back_pain: 'medium',
+    pregnancy: 'medium', bladder: 'medium', none: 'low',
+  };
+  const fatigue = fatigueLookup[condition] || 'low';
+  const sleep   = 7;
+
+  const mlResult = predictML({ battery: batteryCapacityKwh, distance: distanceKm, fatigue, sleep, driverMultiplier });
+
+  return {
+    status:                 mlResult.status,
+    charging_required:      mlResult.charging_required,
+    stops:                  calculateStops(distanceKm, effectiveRangeKm),
+    estimated_range_miles:  Math.round((mlResult.estimated_range / 1.60934) * (1 - weatherPenalty)),
+    health_advice:          mlResult.health_advice,
+    effective_range_miles:  Math.round(effectiveRangeKm / 1.60934),
+  };
+}
+
+export async function runMLPredictionAction(
+  battery: number, start: string, destination: string,
+  sleep: number, fatigue: string
+) {
+  const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY || '';
+  try {
+    const user = await getUser();
+    let driverMultiplier = 1.0;
+    if (user) {
+      const { calculateDriverEfficiency } = await import('@/lib/analysis');
+      driverMultiplier = await calculateDriverEfficiency(user.id);
+    }
+
+    const response = await fetch(
+      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(start)}&destinations=${encodeURIComponent(destination)}&key=${GOOGLE_API_KEY}`
+    );
+    const data = await response.json();
+    if (data.rows?.[0]?.elements?.[0]?.status === 'OK') {
+      const distanceKm = data.rows[0].elements[0].distance.value / 1000;
+      const prediction = predictML({ battery, distance: distanceKm, fatigue, sleep, driverMultiplier });
+      return { success: true, distance: distanceKm, prediction };
+    }
+    return { error: 'Google API issue or route not found' };
+  } catch (err: any) {
+    return { error: err.message || 'Prediction failed' };
+  }
+}
+
 export async function calculateTripData(
   startLat: number, startLon: number,
   destLat: number, destLon: number
 ) {
-  const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+  const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY || '';
 
   // ── Primary: Google Maps Directions API — gives real distance + route polyline ──
   if (GOOGLE_API_KEY && !GOOGLE_API_KEY.startsWith('YOUR_')) {
@@ -312,288 +417,236 @@ export async function calculateTripData(
 // ── Public helper: pick N charging-stop search centres from a route polyline ─
 // Called from TripPlannerClient — takes the decoded polyline and samples
 // evenly-spaced real road points to use as NRCan query centres.
+
+// ── Helper: sample N evenly-spaced real road points from Directions API legs ──
+// Called server-side only — avoids sending large polylines to the client
+async function sampleRouteWaypoints(
+  startLat: number, startLon: number,
+  destLat: number,  destLon: number,
+  numPoints: number,
+  apiKey: string
+): Promise<Array<{ lat: number; lon: number }>> {
+  // Straight-line fallback (used if Directions call fails or no API key)
+  const fallback = () => {
+    const pts: Array<{ lat: number; lon: number }> = [];
+    for (let i = 1; i <= numPoints; i++) {
+      const f = i / (numPoints + 1);
+      pts.push({
+        lat: startLat + (destLat - startLat) * f,
+        lon: startLon + (destLon - startLon) * f,
+      });
+    }
+    return pts;
+  };
+
+  if (!apiKey || apiKey.startsWith('YOUR_')) return fallback();
+
+  try {
+    const url =
+      `https://maps.googleapis.com/maps/api/directions/json` +
+      `?origin=${startLat},${startLon}` +
+      `&destination=${destLat},${destLon}` +
+      `&key=${apiKey}`;
+
+    const res  = await fetch(url);
+    const data = await res.json();
+    const route = data?.routes?.[0];
+    if (!route) return fallback();
+
+    // Collect all step end-points from all legs — these are ON actual roads
+    const roadPoints: Array<{ lat: number; lon: number }> = [{ lat: startLat, lon: startLon }];
+    (route.legs || []).forEach((leg: any) => {
+      (leg.steps || []).forEach((step: any) => {
+        if (step.end_location) {
+          roadPoints.push({ lat: step.end_location.lat, lon: step.end_location.lng });
+        }
+      });
+    });
+    roadPoints.push({ lat: destLat, lon: destLon });
+
+    if (roadPoints.length < 2) return fallback();
+
+    // Sample numPoints evenly-spaced from the road points
+    const result: Array<{ lat: number; lon: number }> = [];
+    for (let i = 1; i <= numPoints; i++) {
+      const idx = Math.round((i / (numPoints + 1)) * (roadPoints.length - 1));
+      result.push(roadPoints[Math.min(idx, roadPoints.length - 1)]);
+    }
+    return result;
+  } catch {
+    return fallback();
+  }
+}
+
+// ── Keep legacy export so existing imports still compile ───────────────────────
 export async function getRouteWaypoints(
   polyline: Array<{ lat: number; lon: number }>,
   startLat: number, startLon: number,
-  destLat: number, destLon: number,
+  destLat: number,  destLon: number,
   numStops: number
 ): Promise<Array<{ lat: number; lon: number }>> {
-  if (numStops === 0) return [];
-
-  // If we have a real polyline, sample it; otherwise fall back to linear interpolation
-  if (polyline && polyline.length > 2) {
-    return samplePolyline(polyline, numStops);
-  }
-
-  // Linear interpolation fallback (no Google key / no polyline)
-  const waypoints: Array<{ lat: number; lon: number }> = [];
-  for (let i = 1; i <= numStops; i++) {
-    const fraction = i / (numStops + 1);
-    waypoints.push({
-      lat: startLat + (destLat - startLat) * fraction,
-      lon: startLon + (destLon - startLon) * fraction,
-    });
-  }
-  return waypoints;
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY || '';
+  return sampleRouteWaypoints(startLat, startLon, destLat, destLon, numStops, apiKey);
 }
 
-// ========================================================
-// TRANSLATED PYTHON PREDICTION ML ENGINE
-// ========================================================
-
-function calculateRange(battery: number, efficiency: number = 5) {
-    return battery * efficiency;
-}
-
-function calculateStops(distance: number, rangeKm: number) {
-    if (rangeKm === 0) return 0;
-    return Math.max(0, Math.ceil(distance / rangeKm) - 1);
-}
-
-function healthCheck(fatigue: string, sleep: number) {
-    if (sleep < 5) {
-        return "⚠️ Low sleep. Take frequent breaks.";
-    } else if (fatigue === "high") {
-        return "🚨 High fatigue. Avoid long driving.";
-    } else {
-        return "✅ You are fit to drive.";
-    }
-}
-
-function predictML(data: { battery: number, distance: number, fatigue: string, sleep: number }) {
-    const rangeKm = calculateRange(data.battery);
-    const result: any = {};
-    
-    if (rangeKm >= data.distance) {
-        result.status = "Reachable";
-        result.charging_required = false;
-        result.stops = 0;
-    } else {
-        result.status = "Charging Needed";
-        result.charging_required = true;
-        result.stops = calculateStops(data.distance, rangeKm);
-    }
-    
-    result.estimated_range = rangeKm;
-    result.health_advice = healthCheck(data.fatigue, data.sleep);
-    
-    return result;
-}
-
-export async function runMLPredictionAction(
-    battery: number, 
-    start: string, 
-    destination: string, 
-    sleep: number, 
-    fatigue: string
-) {
-    // Keep the existing hardcoded API key from the python project
-    const GOOGLE_API_KEY = "AIzaSyCKiutF3dUkcr06Vp9pti-ZQzzLvSAuwjI"; 
-    
-    try {
-        const response = await fetch(
-            `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(start)}&destinations=${encodeURIComponent(destination)}&key=${GOOGLE_API_KEY}`
-        );
-        const data = await response.json();
-        
-        if (data.rows && data.rows.length > 0 && data.rows[0].elements && data.rows[0].elements.length > 0 && data.rows[0].elements[0].status === "OK") {
-            const distanceMeters = data.rows[0].elements[0].distance.value;
-            const distanceKm = distanceMeters / 1000;
-            
-            const prediction = predictML({ battery, distance: distanceKm, fatigue, sleep });
-            
-            // Revalidate to ensure UI updates optionally, not strictly required here
-            return { success: true, distance: distanceKm, prediction };
-        } else {
-            return { error: "Google API issue or route not found" };
-        }
-    } catch(err: any) {
-        return { error: err.message || "Prediction failed" };
-    }
-}
-
-
-// ========================================================
-// ML PREDICTION — directly called from TripPlannerClient
-// Takes distance in miles (converted to km internally) and
-// returns ML model output including health advice
-// ========================================================
-
-export async function runMLPredictionDirect(
-  batteryCapacityKwh: number,
-  distanceMiles: number,
-  weatherPenalty: number,
-  healthData: { healthCondition?: string; preferredRestInterval?: number } | null
-): Promise<{
-  status: string;
-  charging_required: boolean;
-  stops: number;
-  estimated_range_miles: number;
-  health_advice: string;
-  effective_range_miles: number;
-}> {
-  // Convert EV battery capacity + efficiency to estimated range in km
-  // Standard EV efficiency: ~5 km/kWh average  
-  const rangeKm = calculateRange(batteryCapacityKwh);
-  const distanceKm = distanceMiles * 1.60934;
-
-  // Apply weather penalty to effective range
-  const effectiveRangeKm = rangeKm * (1 - weatherPenalty);
-
-  // Health-based fatigue proxy from health profile
-  const condition = healthData?.healthCondition || 'none';
-  const fatigueLookup: Record<string, string> = {
-    chronic_fatigue: 'high',
-    back_pain: 'medium',
-    pregnancy: 'medium',
-    bladder: 'medium',
-    none: 'low',
-  };
-  const fatigue = fatigueLookup[condition] || 'low';
-
-  // Default healthy sleep hours
-  const sleep = 7;
-
-  const mlResult = predictML({
-    battery: batteryCapacityKwh,
-    distance: distanceKm,
-    fatigue,
-    sleep,
-  });
-
-  return {
-    status: mlResult.status,
-    charging_required: mlResult.charging_required,
-    stops: calculateStops(distanceKm, effectiveRangeKm),
-    estimated_range_miles: Math.round((mlResult.estimated_range / 1.60934) * (1 - weatherPenalty)),
-    health_advice: mlResult.health_advice,
-    effective_range_miles: Math.round(effectiveRangeKm / 1.60934),
-  };
-}
-
-
-// ========================================================
-// NRCan CHARGING STATIONS — real-world station data from
-// Natural Resources Canada federal EV station database
-// No API key required. Covers all of Canada.
-// Fallback to NREL AFDC (DEMO_KEY) for US-side routes.
-// ========================================================
-
+// ── Unified action: fetch real charging stations along the route ───────────────
+// Gets its own road-accurate waypoints via Directions API — never interpolates
+// straight-line points that may fall in lakes or off-road.
 export async function fetchNRCanStationsAction(
   waypoints: Array<{ lat: number; lon: number }>,
   routeStart?: { lat: number; lon: number },
   routeDest?:  { lat: number; lon: number }
 ): Promise<ChargingStation[][]> {
-  const results: ChargingStation[][] = [];
-  // Track station IDs used across ALL stops — prevents same station appearing twice
-  const usedIds = new Set<string>();
+  if (waypoints.length === 0) return [];
 
-  // ── Route bounding box ──────────────────────────────────────────────────
-  // Stations outside this box are rejected — prevents e.g. LA stations
-  // appearing on a Toronto→Montreal route. Padding = 2° (~220 km) each side.
-  const PADDING = 2.0;
-  const boxMinLat = routeStart && routeDest ? Math.min(routeStart.lat, routeDest.lat) - PADDING : -90;
-  const boxMaxLat = routeStart && routeDest ? Math.max(routeStart.lat, routeDest.lat) + PADDING :  90;
-  const boxMinLon = routeStart && routeDest ? Math.min(routeStart.lon, routeDest.lon) - PADDING : -180;
-  const boxMaxLon = routeStart && routeDest ? Math.max(routeStart.lon, routeDest.lon) + PADDING :  180;
+  const numStops = waypoints.length;
 
-  const inBoundingBox = (lat: number, lon: number) =>
-    lat >= boxMinLat && lat <= boxMaxLat &&
-    lon >= boxMinLon && lon <= boxMaxLon;
+  // ── Haversine distance helper ─────────────────────────────────────────────
+  const hKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 +
+      Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  };
 
-  for (let i = 0; i < waypoints.length; i++) {
-    const wp = waypoints[i];
-    let candidates: ChargingStation[] = [];
+  // ── Ideal stop positions along the route (straight-line fractions) ─────────
+  // Used only for assigning collected stations to stops — NOT for querying
+  const idealPositions = Array.from({ length: numStops }, (_, i) => {
+    const s = routeStart || waypoints[0];
+    const d = routeDest  || waypoints[waypoints.length - 1];
+    const f = (i + 1) / (numStops + 1);
+    return { lat: s.lat + (d.lat - s.lat) * f, lon: s.lon + (d.lon - s.lon) * f };
+  });
 
-    // ── Primary: NREL AFDC (US + Canada, larger dataset, better dedup support) ──
+  // ── Bounding box of the full route with generous padding ─────────────────
+  const s = routeStart || waypoints[0];
+  const d = routeDest  || waypoints[waypoints.length - 1];
+  const PADDING  = 3.0; // ~330 km — wide enough to catch any highway detours
+  const boxMinLat = Math.min(s.lat, d.lat) - PADDING;
+  const boxMaxLat = Math.max(s.lat, d.lat) + PADDING;
+  const boxMinLon = Math.min(s.lon, d.lon) - PADDING;
+  const boxMaxLon = Math.max(s.lon, d.lon) + PADDING;
+  const inBox = (lat: number, lon: number) =>
+    lat >= boxMinLat && lat <= boxMaxLat && lon >= boxMinLon && lon <= boxMaxLon;
+
+  // ── Strategy: query multiple points along the route, collect all stations ──
+  // Sample 5 evenly-spaced points regardless of numStops to cover the corridor
+  const NUM_QUERY_PTS = Math.max(numStops * 2, 5);
+  const queryPts = Array.from({ length: NUM_QUERY_PTS }, (_, i) => {
+    const f = (i + 1) / (NUM_QUERY_PTS + 1);
+    return { lat: s.lat + (d.lat - s.lat) * f, lon: s.lon + (d.lon - s.lon) * f };
+  });
+  // Also add the actual start/dest midpoints as fallback query points
+  queryPts.push({ lat: (s.lat + d.lat) / 2, lon: (s.lon + d.lon) / 2 });
+
+  // ── Collect ALL stations from every query point ────────────────────────────
+  const allStationsMap = new Map<string, ChargingStation>();
+
+  const nrelKey = process.env.NREL_API_KEY || 'DEMO_KEY';
+
+  await Promise.all(queryPts.map(async (qp) => {
+    // NREL query with 150km radius per point to ensure coverage
     try {
-      const nrelKey = process.env.NREL_API_KEY || 'DEMO_KEY';
-      // Fetch 15 candidates so we have enough to skip already-used stations
-      const nrelUrl =
+      const url =
         `https://developer.nrel.gov/api/alt-fuel-stations/v1.json` +
         `?api_key=${nrelKey}&fuel_type=ELEC` +
-        `&latitude=${wp.lat}&longitude=${wp.lon}` +
-        `&radius=50&limit=15&status=E`;
-
-      const nrelRes = await fetch(nrelUrl, { cache: 'no-store' });
-
-      if (nrelRes.ok) {
-        const nrelData = await nrelRes.json();
-        const raw: any[] = nrelData?.fuel_stations || [];
-        candidates = raw
-          .map((s: any) => ({
-            id:          `nrel-${s.id}`,
-            name:        s.station_name || 'Charging Station',
-            address:     s.street_address || '',
-            city:        s.city || '',
-            province:    s.state || '',
-            lat:         s.latitude,
-            lon:         s.longitude,
-            level2Ports: s.ev_level2_evse_num || 0,
-            dcFastPorts: s.ev_dc_fast_num || 0,
-            network:     s.ev_network || 'Unknown',
-          }))
-          // Prefer DCFC stations first, then by number of ports
-          .filter((s: ChargingStation) => inBoundingBox(s.lat, s.lon))
-          .sort((a: ChargingStation, b: ChargingStation) =>
-            b.dcFastPorts - a.dcFastPorts || b.level2Ports - a.level2Ports
-          );
+        `&latitude=${qp.lat}&longitude=${qp.lon}` +
+        `&radius=150&limit=30&status=E`;
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        (data?.fuel_stations || []).forEach((st: any) => {
+          if (!st.latitude || !st.longitude) return;
+          if (!inBox(st.latitude, st.longitude)) return;
+          const id = `nrel-${st.id}`;
+          if (!allStationsMap.has(id)) {
+            allStationsMap.set(id, {
+              id,
+              name:        st.station_name   || 'Charging Station',
+              address:     st.street_address || '',
+              city:        st.city           || '',
+              province:    st.state          || '',
+              lat:         st.latitude,
+              lon:         st.longitude,
+              level2Ports: st.ev_level2_evse_num || 0,
+              dcFastPorts: st.ev_dc_fast_num     || 0,
+              network:     st.ev_network         || 'Unknown',
+            });
+          }
+        });
       }
-    } catch (e) {
-      console.error(`[NREL] Stop ${i + 1} error:`, e);
-    }
+    } catch {}
 
-    // ── Fallback: NRCan (Canada-only) if NREL returned nothing ───────────────
-    if (candidates.length === 0) {
-      try {
-        const nrcanUrl =
-          `${process.env.NRCAN_EVCS_URL || 'https://chargepoints.ped.nrcan.gc.ca/api/crs/fmt/json'}` +
-          `?lang=en&lat=${wp.lat}&lng=${wp.lon}&dist=50`;
-        const nrcanRes = await fetch(nrcanUrl, { cache: 'no-store' });
-        if (nrcanRes.ok) {
-          const nrcanData = await nrcanRes.json();
-          const raw: any[] = nrcanData?.fuel_stations || [];
-          candidates = raw
-            .filter((s: any) => s.latitude && s.longitude)
-            .filter((s: any) => inBoundingBox(parseFloat(s.latitude), parseFloat(s.longitude)))
-            .map((s: any) => ({
-              id:          `nrcan-${s.id || s.hy_objectid}`,
-              name:        s.station_name || s.name || 'Charging Station',
-              address:     s.street_address || s.address || '',
-              city:        s.city || '',
-              province:    s.state || s.province || '',
-              lat:         parseFloat(s.latitude),
-              lon:         parseFloat(s.longitude),
-              level2Ports: parseInt(s.ev_level2_evse_num) || 0,
-              dcFastPorts: parseInt(s.ev_dc_fast_num) || 0,
-              network:     s.ev_network || s.owner_type_code || 'Unknown',
-            }))
-            .sort((a: ChargingStation, b: ChargingStation) =>
-              b.dcFastPorts - a.dcFastPorts
-            );
-        }
-      } catch (e) {
-        console.error(`[NRCan] Stop ${i + 1} error:`, e);
+    // NRCan query (Canada stations)
+    try {
+      const url =
+        `${process.env.NRCAN_EVCS_URL || 'https://chargepoints.ped.nrcan.gc.ca/api/crs/fmt/json'}` +
+        `?lang=en&lat=${qp.lat}&lng=${qp.lon}&dist=150`;
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        (data?.fuel_stations || []).forEach((st: any) => {
+          if (!st.latitude || !st.longitude) return;
+          const lat = parseFloat(st.latitude), lon = parseFloat(st.longitude);
+          if (!inBox(lat, lon)) return;
+          const id = `nrcan-${st.id || st.hy_objectid}`;
+          if (!allStationsMap.has(id)) {
+            allStationsMap.set(id, {
+              id,
+              name:        st.station_name || st.name || 'Charging Station',
+              address:     st.street_address || st.address || '',
+              city:        st.city      || '',
+              province:    st.state     || st.province || '',
+              lat, lon,
+              level2Ports: parseInt(st.ev_level2_evse_num) || 0,
+              dcFastPorts: parseInt(st.ev_dc_fast_num)     || 0,
+              network:     st.ev_network || st.owner_type_code || 'Unknown',
+            });
+          }
+        });
       }
-    }
+    } catch {}
+  }));
 
-    // ── Deduplicate: skip stations already assigned to a previous stop ────────
-    const unique = candidates.filter(s => !usedIds.has(s.id));
+  const allStations = Array.from(allStationsMap.values());
+  console.log(`[Stations] Collected ${allStations.length} unique stations along the corridor`);
 
-    // Pick best 3 unique stations for this stop
-    const chosen = unique.slice(0, 3);
+  if (allStations.length === 0) {
+    // Nothing found at all — return empty arrays
+    return Array.from({ length: numStops }, () => []);
+  }
 
-    // If no unique stations found at all, allow reuse as absolute last resort
-    if (chosen.length === 0 && candidates.length > 0) {
-      chosen.push(candidates[0]);
-    }
+  // ── Assign stations to stops greedily by proximity ─────────────────────────
+  // For each stop (in order), pick the closest unused station to the ideal position
+  const usedIds = new Set<string>();
+  const results: ChargingStation[][] = [];
 
-    // Mark the top pick as used so subsequent stops won't repeat it
-    if (chosen.length > 0) {
-      usedIds.add(chosen[0].id);
-    }
+  for (let i = 0; i < numStops; i++) {
+    const ideal = idealPositions[i];
 
-    results.push(chosen);
+    // Sort all available (unused) stations by distance to this stop's ideal position
+    const sorted = allStations
+      .filter(st => !usedIds.has(st.id))
+      .map(st => ({ st, dist: hKm(st.lat, st.lon, ideal.lat, ideal.lon) }))
+      .sort((a, b) => {
+        // Prefer DCFC over L2, then by distance
+        if (b.st.dcFastPorts !== a.st.dcFastPorts) return b.st.dcFastPorts - a.st.dcFastPorts;
+        return a.dist - b.dist;
+      });
+
+    // Give each stop a geographic window — stations should be within the right
+    // third of the route, not way behind or ahead
+    const routeLenKm = hKm(s.lat, s.lon, d.lat, d.lon) * 1.3; // rough driving dist
+    const windowKm   = routeLenKm / (numStops + 1) * 1.5; // 1.5x segment length
+
+    // Try to find a station within the window first, fall back to nearest overall
+    const windowMatches = sorted.filter(x => x.dist <= windowKm);
+    const candidates    = (windowMatches.length > 0 ? windowMatches : sorted).slice(0, 3);
+
+    candidates.forEach(c => usedIds.add(c.st.id));
+    results.push(candidates.map(c => c.st));
   }
 
   return results;

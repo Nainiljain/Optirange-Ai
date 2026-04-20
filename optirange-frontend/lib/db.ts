@@ -12,7 +12,7 @@ async function runMigrations() {
     const db = mongoose.connection.db;
     if (!db) return;
 
-    // Drop the old unique index on evdatas.userId that prevents multi-car garage
+
     const evCollection = db.collection('evdatas');
     const indexes = await evCollection.indexes();
     const hasOldIndex = indexes.some((idx: any) => idx.name === 'userId_1' && idx.unique === true);

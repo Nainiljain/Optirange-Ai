@@ -270,8 +270,11 @@ function healthCheck(fatigue: string, sleep: number) {
   return '✅ You are fit to drive.';
 }
 
-function predictML(data: { battery: number; distance: number; fatigue: string; sleep: number }) {
-  const rangeKm = calculateRange(data.battery);
+function predictML(data: { battery: number; distance: number; fatigue: string; sleep: number; driverMultiplier?: number }) {
+  let rangeKm = calculateRange(data.battery);
+  if (data.driverMultiplier) {
+    rangeKm *= data.driverMultiplier;
+  }
   const result: any = {};
   if (rangeKm >= data.distance) {
     result.status = 'Reachable'; result.charging_required = false; result.stops = 0;
@@ -293,7 +296,15 @@ export async function runMLPredictionDirect(
   status: string; charging_required: boolean; stops: number;
   estimated_range_miles: number; health_advice: string; effective_range_miles: number;
 }> {
-  const rangeKm        = calculateRange(batteryCapacityKwh);
+  const user = await getUser();
+  let driverMultiplier = 1.0;
+  if (user) {
+    const { calculateDriverEfficiency } = await import('@/lib/analysis');
+    driverMultiplier = await calculateDriverEfficiency(user.id);
+  }
+
+  const baseRangeKm    = calculateRange(batteryCapacityKwh);
+  const rangeKm        = baseRangeKm * driverMultiplier;
   const distanceKm     = distanceMiles * 1.60934;
   const effectiveRangeKm = rangeKm * (1 - weatherPenalty);
 
@@ -305,7 +316,7 @@ export async function runMLPredictionDirect(
   const fatigue = fatigueLookup[condition] || 'low';
   const sleep   = 7;
 
-  const mlResult = predictML({ battery: batteryCapacityKwh, distance: distanceKm, fatigue, sleep });
+  const mlResult = predictML({ battery: batteryCapacityKwh, distance: distanceKm, fatigue, sleep, driverMultiplier });
 
   return {
     status:                 mlResult.status,
@@ -323,13 +334,20 @@ export async function runMLPredictionAction(
 ) {
   const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY || '';
   try {
+    const user = await getUser();
+    let driverMultiplier = 1.0;
+    if (user) {
+      const { calculateDriverEfficiency } = await import('@/lib/analysis');
+      driverMultiplier = await calculateDriverEfficiency(user.id);
+    }
+
     const response = await fetch(
       `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(start)}&destinations=${encodeURIComponent(destination)}&key=${GOOGLE_API_KEY}`
     );
     const data = await response.json();
     if (data.rows?.[0]?.elements?.[0]?.status === 'OK') {
       const distanceKm = data.rows[0].elements[0].distance.value / 1000;
-      const prediction = predictML({ battery, distance: distanceKm, fatigue, sleep });
+      const prediction = predictML({ battery, distance: distanceKm, fatigue, sleep, driverMultiplier });
       return { success: true, distance: distanceKm, prediction };
     }
     return { error: 'Google API issue or route not found' };

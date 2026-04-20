@@ -10,7 +10,7 @@ const UserSchema = new Schema({
 
 const EvDataSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  // NOTE: unique removed — one user can have multiple cars
+
   nickname: { type: String, default: '' }, // e.g. "Daily Driver", "Road Trip Car"
   make: { type: String },
   model: { type: String },
@@ -48,23 +48,23 @@ export const Trip = models.Trip || model('Trip', TripSchema);
 
 // ── Saved Locations (Home, Work, Favourites) ──────────────────────────────────
 const SavedLocationSchema = new Schema({
-  userId:    { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  label:     { type: String, required: true },       // "Home", "Work", or custom name
-  type:      { type: String, default: 'favourite' }, // 'home' | 'work' | 'favourite'
-  address:   { type: String, required: true },
-  lat:       { type: Number, required: true },
-  lon:       { type: Number, required: true },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  label: { type: String, required: true },       // "Home", "Work", or custom name
+  type: { type: String, default: 'favourite' }, // 'home' | 'work' | 'favourite'
+  address: { type: String, required: true },
+  lat: { type: Number, required: true },
+  lon: { type: Number, required: true },
   createdAt: { type: Date, default: Date.now },
 });
 
 // ── Recent Searches ────────────────────────────────────────────────────────────
 const RecentSearchSchema = new Schema({
-  userId:    { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  address:   { type: String, required: true },
-  lat:       { type: Number, required: true },
-  lon:       { type: Number, required: true },
-  usedAt:    { type: Date, default: Date.now },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  address: { type: String, required: true },
+  lat: { type: Number, required: true },
+  lon: { type: Number, required: true },
+  usedAt: { type: Date, default: Date.now },
 });
 
 export const SavedLocation = models.SavedLocation || model('SavedLocation', SavedLocationSchema);
-export const RecentSearch  = models.RecentSearch  || model('RecentSearch',  RecentSearchSchema);
+export const RecentSearch = models.RecentSearch || model('RecentSearch', RecentSearchSchema);

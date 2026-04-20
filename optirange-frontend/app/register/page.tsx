@@ -92,16 +92,28 @@ export default function RegisterPage() {
               )}
             </AnimatePresence>
 
-            {/* ── Full Name ─────────────────────────────────────── */}
-            <div className="relative">
-              <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-foreground/40" />
-              <input
-                type="text"
-                name="name"
-                required
-                placeholder="Full Name"
-                className="w-full bg-background/50 border border-border rounded-xl px-12 py-3.5 outline-none focus:ring-2 focus:ring-purple-500 transition-all"
-              />
+            {/* ── First Name & Last Name ────────────────────────── */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="relative">
+                <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-foreground/40" />
+                <input
+                  type="text"
+                  name="firstName"
+                  required
+                  placeholder="First Name"
+                  className="w-full bg-background/50 border border-border rounded-xl px-11 py-3.5 outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                />
+              </div>
+              <div className="relative">
+                <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-foreground/40" />
+                <input
+                  type="text"
+                  name="lastName"
+                  required
+                  placeholder="Last Name"
+                  className="w-full bg-background/50 border border-border rounded-xl px-11 py-3.5 outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                />
+              </div>
             </div>
 
             {/* ── Email ─────────────────────────────────────────── */}

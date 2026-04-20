@@ -43,7 +43,7 @@ export default async function TripPlanner({
   const serialisedCars    = allCars.map((c: any) => ({ ...c, _id: c._id.toString(), userId: c.userId.toString() }))
   const serialisedInitial = { ...initialCar, _id: initialCar._id.toString(), userId: initialCar.userId.toString() }
   const serialisedHealth  = healthData ? { ...healthData, _id: healthData._id.toString(), userId: healthData.userId.toString() } : null
-  const serialisedUser    = { id: user.id, name: user.name, email: user.email, profilePic: user.profilePic ?? null }
+  const serialisedUser    = { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, profilePic: user.profilePic ?? null }
 
   // Fetch saved locations and recent searches
   const savedLocations  = await getSavedLocationsAction()
@@ -54,7 +54,7 @@ export default async function TripPlanner({
       {/* ── Sidebar ── */}
       <AppSidebar
         activePage="trip-planner"
-        user={{ name: user.name, email: user.email, profilePic: user.profilePic ?? null }}
+        user={{ firstName: user.firstName, lastName: user.lastName, email: user.email, profilePic: user.profilePic ?? null }}
       />
 
       {/* ── Main ── */}

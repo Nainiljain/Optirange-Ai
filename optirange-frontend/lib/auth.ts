@@ -34,7 +34,7 @@ export async function getUser() {
   
   let user;
   try {
-    user = await User.findById(decoded.id).select('_id name email profilePic').lean() as any;
+    user = await User.findById(decoded.id).select('_id firstName lastName name email profilePic').lean() as any;
   } catch (err) {
     // Gracefully handle SQLite "1" IDs crashing MongoDB ObjectID casting
     return null;
@@ -42,11 +42,20 @@ export async function getUser() {
   
   if (!user) return null
 
+  let firstName = user.firstName;
+  let lastName = user.lastName;
+  if (!firstName && !lastName && user.name) {
+    const parts = user.name.split(' ');
+    firstName = parts[0] || '';
+    lastName = parts.slice(1).join(' ') || '';
+  }
+
   // Return a fully serialised plain object — safe to pass to Client Components
   return {
     id:         user._id.toString(),
     _id:        user._id.toString(),
-    name:       user.name       ?? '',
+    firstName:  firstName ?? '',
+    lastName:   lastName  ?? '',
     email:      user.email      ?? '',
     profilePic: user.profilePic ?? null,
   }

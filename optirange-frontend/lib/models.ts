@@ -1,5 +1,10 @@
 import mongoose, { Schema, model, models } from 'mongoose';
 
+// Ensure schema changes are captured during hot reloads in development
+if (process.env.NODE_ENV !== 'production') {
+  mongoose.models = {};
+}
+
 const UserSchema = new Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },

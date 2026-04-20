@@ -167,7 +167,7 @@ export async function updateProfileAction(prevState: any, formData: FormData) {
     updateData.password = await bcrypt.hash(password, 10)
   }
 
-  await User.updateOne({ _id: user.id }, updateData)
+  await User.findByIdAndUpdate(user.id, { $set: updateData }, { new: true, runValidators: true })
 
   // Revalidate all routes that display user info (sidebar, header, etc.)
   revalidatePath('/dashboard')

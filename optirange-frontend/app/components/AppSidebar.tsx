@@ -1,17 +1,18 @@
 import Link from "next/link"
-import { Zap, Map, Activity, Settings2, LogOut, UserCog } from "lucide-react"
+import { Zap, Map, Activity, Settings2, LogOut, UserCog, Wrench } from "lucide-react"
 import { logoutAction } from "@/app/actions"
 
 /** Sidebar navigation items — single source of truth for both pages */
 const NAV_ITEMS = [
   { href: "/dashboard",    label: "Overview",       icon: Activity, page: "dashboard" as const },
   { href: "/trip-planner", label: "Trip Planner",   icon: Map,      page: "trip-planner" as const },
+  { href: "/service",      label: "Service Logs",   icon: Wrench,   page: "service" as const },
   { href: "/ev-setup",     label: "Add Vehicle",    icon: Settings2, page: "ev-setup" as const },
   { href: "/health-setup", label: "Health Profile",  icon: Activity, page: "health-setup" as const },
 ] as const
 
 interface AppSidebarProps {
-  activePage: "dashboard" | "trip-planner" | "ev-setup" | "health-setup" | "profile"
+  activePage: "dashboard" | "trip-planner" | "service" | "ev-setup" | "health-setup" | "profile"
   user: { firstName: string; lastName: string; email: string; profilePic?: string | null }
 }
 

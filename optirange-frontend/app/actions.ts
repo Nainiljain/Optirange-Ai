@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs'
 import { interpolateWaypoints, type ChargingStation } from '@/lib/tripUtils'
 export type { ChargingStation } from '@/lib/tripUtils'
 import { connectDB } from '@/lib/db'
-import { User, EvData, HealthData, Trip } from '@/lib/models'
+import { User, EvData, HealthData, Trip, ServiceLog } from '@/lib/models'
 import { getUser, setUserSession, clearUserSession } from '@/lib/auth'
 
 async function fileToBase64(file: any): Promise<string | null> {
@@ -107,7 +107,7 @@ export async function getUserProfileAction() {
   const user = await getUser()
   if (!user) return null
   await connectDB()
-  const full = await User.findById(user.id).select('firstName lastName name email profilePic').lean() as any
+  const full = await User.findById(user.id).select('firstName lastName name email profilePic role').lean() as any
   if (!full) return null
   
   let firstName = full.firstName;
@@ -123,6 +123,7 @@ export async function getUserProfileAction() {
     lastName:   lastName ?? '',
     email:      full.email      ?? '',
     profilePic: full.profilePic ?? null,
+    role:       (full.role as 'user' | 'admin') ?? 'user',
   }
 }
 
@@ -853,3 +854,196 @@ export async function getHealthDataAction() {
     preferredRestInterval: h.preferredRestInterval ?? 120,
   }
 }
+
+
+// ============================================================
+// SERVICE LOGS — EV Maintenance Tracker
+// ============================================================
+
+/** Fetch all service logs for the current user (newest first). */
+export async function getServiceLogsAction() {
+  const user = await getUser()
+  if (!user) return []
+  await connectDB()
+  const logs = await ServiceLog.find({ userId: user.id })
+    .sort({ date: -1 })
+    .lean() as any[]
+  return logs.map((l: any) => ({
+    id:          l._id.toString(),
+    evId:        l.evId.toString(),
+    serviceType: l.serviceType,
+    date:        l.date instanceof Date ? l.date.toISOString() : String(l.date),
+    cost:        l.cost ?? null,
+    notes:       l.notes ?? '',
+    createdAt:   l.createdAt instanceof Date ? l.createdAt.toISOString() : String(l.createdAt),
+  }))
+}
+
+/** Create a new service log entry. */
+export async function createServiceLogAction(prevState: any, formData: FormData) {
+  const user = await getUser()
+  if (!user) return { error: 'Unauthorized' }
+
+  const evId       = formData.get('evId')       as string
+  const serviceType = formData.get('serviceType') as string
+  const dateStr    = formData.get('date')        as string
+  const costRaw    = formData.get('cost')        as string
+  const notes      = formData.get('notes')       as string | null
+
+  if (!evId || !serviceType || !dateStr) {
+    return { error: 'Vehicle, service type, and date are required' }
+  }
+
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return { error: 'Invalid date' }
+
+  const cost = costRaw ? parseFloat(costRaw) : undefined
+  if (cost !== undefined && (isNaN(cost) || cost < 0)) {
+    return { error: 'Cost must be a positive number' }
+  }
+
+  await connectDB()
+
+  // Verify the EV belongs to this user
+  const ev = await EvData.findOne({ _id: evId, userId: user.id }).lean()
+  if (!ev) return { error: 'Vehicle not found' }
+
+  const log = await ServiceLog.create({
+    userId: user.id, evId, serviceType, date, cost, notes: notes || '',
+  })
+
+  revalidatePath('/service')
+  revalidatePath('/dashboard')
+  return { success: true, id: log._id.toString() }
+}
+
+/** Update an existing service log entry. */
+export async function updateServiceLogAction(prevState: any, formData: FormData) {
+  const user = await getUser()
+  if (!user) return { error: 'Unauthorized' }
+
+  const logId      = formData.get('logId')       as string
+  const serviceType = formData.get('serviceType') as string
+  const dateStr    = formData.get('date')        as string
+  const costRaw    = formData.get('cost')        as string
+  const notes      = formData.get('notes')       as string | null
+
+  if (!logId || !serviceType || !dateStr) {
+    return { error: 'Log ID, service type, and date are required' }
+  }
+
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return { error: 'Invalid date' }
+
+  const cost = costRaw ? parseFloat(costRaw) : undefined
+  if (cost !== undefined && (isNaN(cost) || cost < 0)) {
+    return { error: 'Cost must be a positive number' }
+  }
+
+  await connectDB()
+
+  // Ensure ownership
+  const existing = await ServiceLog.findOne({ _id: logId, userId: user.id }).lean()
+  if (!existing) return { error: 'Service log not found' }
+
+  await ServiceLog.updateOne(
+    { _id: logId },
+    { $set: { serviceType, date, cost, notes: notes || '' } }
+  )
+
+  revalidatePath('/service')
+  revalidatePath('/dashboard')
+  return { success: true }
+}
+
+/** Delete a service log entry. Ownership-checked. */
+export async function deleteServiceLogAction(logId: string) {
+  const user = await getUser()
+  if (!user) return { error: 'Unauthorized' }
+
+  await connectDB()
+  await ServiceLog.deleteOne({ _id: logId, userId: user.id })
+
+  revalidatePath('/service')
+  revalidatePath('/dashboard')
+  return { success: true }
+}
+
+// ============================================================
+// ADMIN PORTAL — platform-level management (admin role only)
+// ============================================================
+
+/** Guard helper: resolves the current user and asserts admin role. */
+async function requireAdmin() {
+  const user = await getUser()
+  if (!user) throw new Error('Unauthorized')
+  if (user.role !== 'admin') throw new Error('Forbidden: admin access required')
+  return user
+}
+
+/** Return a paginated list of all users (admin only). */
+export async function adminGetUsersAction(page = 1, limit = 20) {
+  try {
+    await requireAdmin()
+  } catch (e: any) {
+    return { error: e.message }
+  }
+  await connectDB()
+  const skip  = (page - 1) * limit
+  const total = await User.countDocuments()
+  const users = await User.find()
+    .select('_id firstName lastName email role createdAt')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean() as any[]
+
+  return {
+    users: users.map((u: any) => ({
+      id:        u._id.toString(),
+      firstName: u.firstName ?? '',
+      lastName:  u.lastName  ?? '',
+      email:     u.email,
+      role:      u.role ?? 'user',
+      createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : String(u.createdAt),
+    })),
+    total,
+    page,
+    limit,
+  }
+}
+
+/** Promote or demote a user's role (admin only). */
+export async function adminSetUserRoleAction(targetUserId: string, role: 'user' | 'admin') {
+  try {
+    await requireAdmin()
+  } catch (e: any) {
+    return { error: e.message }
+  }
+  if (!['user', 'admin'].includes(role)) return { error: 'Invalid role' }
+  await connectDB()
+  await User.findByIdAndUpdate(targetUserId, { $set: { role } })
+  revalidatePath('/admin')
+  return { success: true }
+}
+
+/** Return aggregate service log stats across all users (admin only). */
+export async function adminGetServiceStatsAction() {
+  try {
+    await requireAdmin()
+  } catch (e: any) {
+    return { error: e.message }
+  }
+  await connectDB()
+  const [totalLogs, totalCostAgg, byType] = await Promise.all([
+    ServiceLog.countDocuments(),
+    ServiceLog.aggregate([{ $group: { _id: null, total: { $sum: '$cost' } } }]),
+    ServiceLog.aggregate([{ $group: { _id: '$serviceType', count: { $sum: 1 } } }]),
+  ])
+  return {
+    totalLogs,
+    totalCost: totalCostAgg[0]?.total ?? 0,
+    byType:    byType.map((b: any) => ({ serviceType: b._id, count: b.count })),
+  }
+}
+

@@ -11,6 +11,8 @@ const UserSchema = new Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   profilePic: { type: String },
+  // RBAC: 'user' is the default role; 'admin' grants access to the Admin Portal
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -51,6 +53,28 @@ export const User = models.User || model('User', UserSchema);
 export const EvData = models.EvData || model('EvData', EvDataSchema);
 export const HealthData = models.HealthData || model('HealthData', HealthDataSchema);
 export const Trip = models.Trip || model('Trip', TripSchema);
+
+// ── Service Logs (EV Maintenance Tracker) ─────────────────────────────────────
+const ServiceLogSchema = new Schema({
+  userId:      { type: Schema.Types.ObjectId, ref: 'User',   required: true },
+  evId:        { type: Schema.Types.ObjectId, ref: 'EvData', required: true },
+  serviceType: {
+    type: String,
+    required: true,
+    // Common EV service types — users may also enter a custom value
+    enum: [
+      'Tire Rotation', 'Battery Check', 'Software Update',
+      'Brake Inspection', 'Cabin Filter', 'Coolant Service',
+      'Wheel Alignment', 'Wiper Replacement', 'Other',
+    ],
+  },
+  date:  { type: Date,   required: true },
+  cost:  { type: Number, min: 0 },
+  notes: { type: String },
+  createdAt: { type: Date, default: Date.now },
+});
+
+export const ServiceLog = models.ServiceLog || model('ServiceLog', ServiceLogSchema);
 
 // ── Saved Locations (Home, Work, Favourites) ──────────────────────────────────
 const SavedLocationSchema = new Schema({

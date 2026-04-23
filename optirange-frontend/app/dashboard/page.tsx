@@ -58,7 +58,7 @@ export default async function Dashboard() {
       {/* ── Sidebar ── */}
       <AppSidebar
         activePage="dashboard"
-        user={{ firstName: user.firstName, lastName: user.lastName, email: user.email, profilePic: user.profilePic ?? null }}
+        user={{ firstName: user.firstName, lastName: user.lastName, email: user.email, profilePic: user.profilePic ?? null, role: user.role }}
       />
 
       {/* ── Main ── */}

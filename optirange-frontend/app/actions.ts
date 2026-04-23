@@ -1047,3 +1047,54 @@ export async function adminGetServiceStatsAction() {
   }
 }
 
+/**
+ * Aggregate platform-wide stats for the Admin Portal dashboard.
+ * Strictly guarded — throws Forbidden if caller is not an admin.
+ */
+export async function adminGetSystemStatsAction() {
+  try {
+    await requireAdmin()
+  } catch (e: any) {
+    return { error: e.message as string }
+  }
+  await connectDB()
+
+  const [
+    totalUsers,
+    totalEVs,
+    totalTrips,
+    totalServiceLogs,
+    totalServiceCostAgg,
+    recentUsers,
+  ] = await Promise.all([
+    User.countDocuments(),
+    EvData.countDocuments(),
+    Trip.countDocuments(),
+    ServiceLog.countDocuments(),
+    ServiceLog.aggregate([{ $group: { _id: null, total: { $sum: '$cost' } } }]),
+    // 10 most recently registered users for the "New Users" table
+    User.find()
+      .select('_id firstName lastName email role createdAt')
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean(),
+  ])
+
+  return {
+    totalUsers,
+    totalEVs,
+    totalTrips,
+    totalServiceLogs,
+    totalServiceCost: totalServiceCostAgg[0]?.total ?? 0,
+    recentUsers: (recentUsers as any[]).map((u: any) => ({
+      id:        u._id.toString(),
+      firstName: u.firstName ?? '',
+      lastName:  u.lastName  ?? '',
+      email:     u.email,
+      role:      (u.role ?? 'user') as 'user' | 'admin',
+      createdAt: u.createdAt instanceof Date
+        ? u.createdAt.toISOString()
+        : String(u.createdAt),
+    })),
+  }
+}

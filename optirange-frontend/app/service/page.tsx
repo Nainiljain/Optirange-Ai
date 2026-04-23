@@ -55,6 +55,7 @@ export default async function ServicePage() {
           lastName:   user.lastName,
           email:      user.email,
           profilePic: user.profilePic ?? null,
+          role:       user.role,
         }}
       />
 

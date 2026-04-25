@@ -54,7 +54,7 @@ export default async function TripPlanner({
       {/* ── Sidebar ── */}
       <AppSidebar
         activePage="trip-planner"
-        user={{ firstName: user.firstName, lastName: user.lastName, email: user.email, profilePic: user.profilePic ?? null }}
+        user={{ firstName: user.firstName, lastName: user.lastName, email: user.email, profilePic: user.profilePic ?? null, role: user.role }}
       />
 
       {/* ── Main ── */}

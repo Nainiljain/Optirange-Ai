@@ -34,7 +34,7 @@ export async function getUser() {
   
   let user;
   try {
-    user = await User.findById(decoded.id).select('_id firstName lastName name email profilePic').lean() as any;
+    user = await User.findById(decoded.id).select('_id firstName lastName name email profilePic role').lean() as any;
   } catch (err) {
     // Gracefully handle SQLite "1" IDs crashing MongoDB ObjectID casting
     return null;
@@ -58,6 +58,8 @@ export async function getUser() {
     lastName:   lastName  ?? '',
     email:      user.email      ?? '',
     profilePic: user.profilePic ?? null,
+    // RBAC: expose role so layouts can gate admin-only routes/UI
+    role:       (user.role as 'user' | 'admin') ?? 'user',
   }
 }
 
